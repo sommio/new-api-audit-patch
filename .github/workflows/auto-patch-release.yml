@@ -21,8 +21,10 @@ jobs:
     outputs:
       release_ref: ${{ steps.release.outputs.ref }}
       release_sha: ${{ steps.release.outputs.sha }}
+      release_short_sha: ${{ steps.release.outputs.short_sha }}
       main_ref: ${{ steps.main.outputs.ref }}
       main_sha: ${{ steps.main.outputs.sha }}
+      main_short_sha: ${{ steps.main.outputs.short_sha }}
     steps:
       - name: Resolve release revision
         id: release
@@ -34,6 +36,7 @@ jobs:
           test -n "$sha"
           echo "ref=$ref" >> "$GITHUB_OUTPUT"
           echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "short_sha=${sha:0:7}" >> "$GITHUB_OUTPUT"
 
       - name: Resolve main revision
         id: main
@@ -42,6 +45,7 @@ jobs:
           test -n "$sha"
           echo "ref=main" >> "$GITHUB_OUTPUT"
           echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "short_sha=${sha:0:7}" >> "$GITHUB_OUTPUT"
 
   build:
     needs: prepare
@@ -74,12 +78,15 @@ jobs:
           if [ "${{ matrix.track }}" = release ]; then
             ref='${{ needs.prepare.outputs.release_ref }}'
             sha='${{ needs.prepare.outputs.release_sha }}'
+            short_sha='${{ needs.prepare.outputs.release_short_sha }}'
           else
             ref='${{ needs.prepare.outputs.main_ref }}'
             sha='${{ needs.prepare.outputs.main_sha }}'
+            short_sha='${{ needs.prepare.outputs.main_short_sha }}'
           fi
           echo "ref=$ref" >> "$GITHUB_OUTPUT"
           echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "short_sha=$short_sha" >> "$GITHUB_OUTPUT"
 
       - name: Check out upstream
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -147,8 +154,8 @@ jobs:
           push: true
           platforms: ${{ matrix.platform }}
           tags: |
-            ghcr.io/sommio/new-api-audit-patch:sha-${{ steps.upstream.outputs.sha }}-${{ matrix.arch }}
-            ghcr.io/sommio/new-api-audit-patch:${{ matrix.track }}-sha-${{ steps.upstream.outputs.sha }}-${{ matrix.arch }}
+            ghcr.io/sommio/new-api-audit-patch:${{ steps.upstream.outputs.ref }}-${{ matrix.arch }}
+            ghcr.io/sommio/new-api-audit-patch:${{ steps.upstream.outputs.short_sha }}-${{ matrix.arch }}
           provenance: mode=max
           sbom: true
           cache-from: type=gha,scope=${{ matrix.track }}-${{ matrix.arch }}
@@ -173,9 +180,11 @@ jobs:
         id: upstream
         run: |
           if [ "${{ matrix.track }}" = release ]; then
-            echo "sha=${{ needs.prepare.outputs.release_sha }}" >> "$GITHUB_OUTPUT"
+            echo "ref=${{ needs.prepare.outputs.release_ref }}" >> "$GITHUB_OUTPUT"
+            echo "short_sha=${{ needs.prepare.outputs.release_short_sha }}" >> "$GITHUB_OUTPUT"
           else
-            echo "sha=${{ needs.prepare.outputs.main_sha }}" >> "$GITHUB_OUTPUT"
+            echo "ref=${{ needs.prepare.outputs.main_ref }}" >> "$GITHUB_OUTPUT"
+            echo "short_sha=${{ needs.prepare.outputs.main_short_sha }}" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Log in to GHCR
@@ -188,8 +197,12 @@ jobs:
       - name: Create multi-architecture manifests
         env:
           IMAGE: ghcr.io/sommio/new-api-audit-patch
-          SHA: ${{ steps.upstream.outputs.sha }}
+          REF: ${{ steps.upstream.outputs.ref }}
+          SHORT_SHA: ${{ steps.upstream.outputs.short_sha }}
           TRACK: ${{ matrix.track }}
         run: |
-          docker buildx imagetools create -t "$IMAGE:sha-$SHA" "$IMAGE:sha-$SHA-amd64" "$IMAGE:sha-$SHA-arm64"
-          docker buildx imagetools create -t "$IMAGE:$TRACK-sha-$SHA" "$IMAGE:$TRACK-sha-$SHA-amd64" "$IMAGE:$TRACK-sha-$SHA-arm64"
+          docker buildx imagetools create -t "$IMAGE:$REF" "$IMAGE:$REF-amd64" "$IMAGE:$REF-arm64"
+          docker buildx imagetools create -t "$IMAGE:$SHORT_SHA" "$IMAGE:$SHORT_SHA-amd64" "$IMAGE:$SHORT_SHA-arm64"
+          if [ "$TRACK" = release ]; then
+            docker buildx imagetools create -t "$IMAGE:latest" "$IMAGE:$REF-amd64" "$IMAGE:$REF-arm64"
+          fi
