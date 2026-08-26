@@ -151,6 +151,8 @@ jobs:
             ghcr.io/sommio/new-api-audit-patch:${{ matrix.track }}-sha-${{ steps.upstream.outputs.sha }}-${{ matrix.arch }}
           provenance: mode=max
           sbom: true
+          cache-from: type=gha,scope=${{ matrix.track }}-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.track }}-${{ matrix.arch }}
 
       - name: Attest image provenance
         uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3.0.0
