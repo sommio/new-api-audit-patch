@@ -55,7 +55,10 @@ jobs:
 
       - name: Apply patches
         working-directory: upstream
-        run: git am --3way ../patch-queue/patches/*.patch
+        run: |
+          git config user.name 'new-api-audit-patch[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git am --3way ../patch-queue/patches/*.patch
 
       - name: Set up Go
         uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
