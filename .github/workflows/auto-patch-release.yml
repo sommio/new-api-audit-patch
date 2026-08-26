@@ -104,7 +104,7 @@ jobs:
           sbom: true
 
       - name: Attest image provenance
-        uses: actions/attest-build-provenance@977bb5958a2869b2b68a655af79fcb2b6b284e07 # v3.0.0
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3.0.0
         with:
           subject-name: ghcr.io/sommio/new-api-audit-patch
           subject-digest: ${{ steps.image.outputs.digest }}
