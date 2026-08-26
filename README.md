@@ -1,3 +1,5 @@
+[English](README.md) | [简体中文](README.zh.md)
+
 # new-api-audit-patch
 
 This repository stores only the audit patch queue and its release automation.
@@ -15,3 +17,8 @@ Published tags:
 
 Deploy by digest, not a moving `latest` or `main` tag. Version and short-SHA
 tags may also be republished if this patch queue changes.
+
+## Documentation
+
+- [使用指南 / Usage](docs/zh/usage.md) · [English](docs/en/usage.md) — deploy and configure the patched gateway
+- [审计事件契约 / Audit webhook contract](docs/zh/webhook.md) · [English](docs/en/webhook.md) — how external systems receive audit data (endpoints, signature, event fields)
