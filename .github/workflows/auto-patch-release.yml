@@ -16,27 +16,68 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      release_ref: ${{ steps.release.outputs.ref }}
+      release_sha: ${{ steps.release.outputs.sha }}
+      main_ref: ${{ steps.main.outputs.ref }}
+      main_sha: ${{ steps.main.outputs.sha }}
+    steps:
+      - name: Resolve release revision
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ref=$(gh api repos/QuantumNous/new-api/releases/latest --jq .tag_name)
+          sha=$(git ls-remote https://github.com/QuantumNous/new-api.git "refs/tags/$ref^{}" "refs/tags/$ref" | head -1 | cut -f1)
+          test -n "$sha"
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
+      - name: Resolve main revision
+        id: main
+        run: |
+          sha=$(git ls-remote https://github.com/QuantumNous/new-api.git refs/heads/main | cut -f1)
+          test -n "$sha"
+          echo "ref=main" >> "$GITHUB_OUTPUT"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
   build:
+    needs: prepare
     strategy:
       fail-fast: false
       matrix:
-        track: [release, main]
-    runs-on: ubuntu-latest
+        include:
+          - track: release
+            arch: amd64
+            platform: linux/amd64
+            runner: ubuntu-latest
+          - track: release
+            arch: arm64
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
+          - track: main
+            arch: amd64
+            platform: linux/amd64
+            runner: ubuntu-latest
+          - track: main
+            arch: arm64
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
     steps:
-      - name: Resolve upstream revision
+      - name: Select upstream revision
         id: upstream
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TRACK: ${{ matrix.track }}
         run: |
-          if [ "$TRACK" = release ]; then
-            ref=$(gh api repos/QuantumNous/new-api/releases/latest --jq .tag_name)
+          if [ "${{ matrix.track }}" = release ]; then
+            ref='${{ needs.prepare.outputs.release_ref }}'
+            sha='${{ needs.prepare.outputs.release_sha }}'
           else
-            ref=main
+            ref='${{ needs.prepare.outputs.main_ref }}'
+            sha='${{ needs.prepare.outputs.main_sha }}'
           fi
-          sha=$(git ls-remote https://github.com/QuantumNous/new-api.git "refs/tags/$ref^{}" "refs/tags/$ref" "refs/heads/$ref" | head -1 | cut -f1)
-          test -n "$sha"
           echo "ref=$ref" >> "$GITHUB_OUTPUT"
           echo "sha=$sha" >> "$GITHUB_OUTPUT"
 
@@ -104,10 +145,10 @@ jobs:
         with:
           context: upstream
           push: true
-          platforms: linux/amd64,linux/arm64
+          platforms: ${{ matrix.platform }}
           tags: |
-            ghcr.io/sommio/new-api-audit-patch:sha-${{ steps.upstream.outputs.sha }}
-            ghcr.io/sommio/new-api-audit-patch:${{ matrix.track }}-sha-${{ steps.upstream.outputs.sha }}
+            ghcr.io/sommio/new-api-audit-patch:sha-${{ steps.upstream.outputs.sha }}-${{ matrix.arch }}
+            ghcr.io/sommio/new-api-audit-patch:${{ matrix.track }}-sha-${{ steps.upstream.outputs.sha }}-${{ matrix.arch }}
           provenance: mode=max
           sbom: true
 
@@ -117,3 +158,36 @@ jobs:
           subject-name: ghcr.io/sommio/new-api-audit-patch
           subject-digest: ${{ steps.image.outputs.digest }}
           push-to-registry: true
+
+  manifest:
+    needs: [prepare, build]
+    strategy:
+      fail-fast: false
+      matrix:
+        track: [release, main]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Select upstream revision
+        id: upstream
+        run: |
+          if [ "${{ matrix.track }}" = release ]; then
+            echo "sha=${{ needs.prepare.outputs.release_sha }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "sha=${{ needs.prepare.outputs.main_sha }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Log in to GHCR
+        uses: docker/login-action@c99871dec2022cc055c062a10cc1a1310835ceb4 # v4.3.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Create multi-architecture manifests
+        env:
+          IMAGE: ghcr.io/sommio/new-api-audit-patch
+          SHA: ${{ steps.upstream.outputs.sha }}
+          TRACK: ${{ matrix.track }}
+        run: |
+          docker buildx imagetools create -t "$IMAGE:sha-$SHA" "$IMAGE:sha-$SHA-amd64" "$IMAGE:sha-$SHA-arm64"
+          docker buildx imagetools create -t "$IMAGE:$TRACK-sha-$SHA" "$IMAGE:$TRACK-sha-$SHA-amd64" "$IMAGE:$TRACK-sha-$SHA-arm64"
