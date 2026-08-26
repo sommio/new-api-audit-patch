@@ -1,0 +1,348 @@
+From eff4805e178ba54881f32d65820287b0f212ab7c Mon Sep 17 00:00:00 2001
+From: ck_235 <ck_235@sina.com>
+Date: Tue, 2 Jun 2026 22:42:43 +0800
+Subject: [PATCH] feat: add token audit hooks
+
+---
+ audit/sender.go     | 224 ++++++++++++++++++++++++++++++++++++++++++++
+ controller/relay.go |  23 ++++-
+ model/log.go        |  23 +++++
+ 3 files changed, 269 insertions(+), 1 deletion(-)
+ create mode 100644 audit/sender.go
+
+diff --git a/audit/sender.go b/audit/sender.go
+new file mode 100644
+index 00000000..7fc949f0
+--- /dev/null
++++ b/audit/sender.go
+@@ -0,0 +1,224 @@
++package audit
++
++import (
++	"bytes"
++	"crypto/hmac"
++	"crypto/sha256"
++	"encoding/hex"
++	"encoding/json"
++	"log"
++	"net/http"
++	"os"
++	"strconv"
++	"strings"
++	"sync"
++	"time"
++)
++
++const (
++	requestPath = "/internal/new-api/audit/request"
++	usagePath   = "/internal/new-api/audit/usage"
++)
++
++type RequestEvent struct {
++	RequestId     string `json:"request_id"`
++	CreatedAt     string `json:"created_at"`
++	UserId        int    `json:"user_id"`
++	Username      string `json:"username"`
++	TokenId       int    `json:"token_id"`
++	TokenName     string `json:"token_name"`
++	ModelName     string `json:"model_name"`
++	RequestPath   string `json:"request_path"`
++	RelayFormat   string `json:"relay_format"`
++	IsStream      bool   `json:"is_stream"`
++	PromptHash    string `json:"prompt_hash"`
++	PromptPreview string `json:"prompt_preview"`
++	PromptText    string `json:"prompt_text"`
++}
++
++type UsageEvent struct {
++	RequestId         string `json:"request_id"`
++	CreatedAt         string `json:"created_at"`
++	UserId            int    `json:"user_id"`
++	Username          string `json:"username"`
++	TokenId           int    `json:"token_id"`
++	TokenName         string `json:"token_name"`
++	ModelName         string `json:"model_name"`
++	PromptTokens      int    `json:"prompt_tokens"`
++	CompletionTokens  int    `json:"completion_tokens"`
++	Quota             int    `json:"quota"`
++	ChannelId         int    `json:"channel_id"`
++	Group             string `json:"group"`
++	UseTimeSeconds    int    `json:"use_time_seconds"`
++	IsStream          bool   `json:"is_stream"`
++	UpstreamRequestId string `json:"upstream_request_id"`
++}
++
++type config struct {
++	enabled  bool
++	endpoint string
++	secret   string
++	timeout  time.Duration
++	excluded map[string]struct{}
++}
++
++type outboundEvent struct {
++	path string
++	body []byte
++}
++
++var (
++	initOnce sync.Once
++	cfg      config
++	queue    chan outboundEvent
++)
++
++func EnabledForToken(tokenName string) bool {
++	c := getConfig()
++	if !c.enabled {
++		return false
++	}
++	_, excluded := c.excluded[tokenName]
++	return !excluded
++}
++
++func HashText(text string) string {
++	sum := sha256.Sum256([]byte(text))
++	return hex.EncodeToString(sum[:])
++}
++
++func PreviewText(text string, limit int) string {
++	compact := strings.Join(strings.Fields(strings.ReplaceAll(text, "\r", "\n")), " ")
++	if len(compact) <= limit {
++		return compact
++	}
++	return compact[:limit] + "..."
++}
++
++func EnqueueRequest(event RequestEvent) {
++	enqueue(requestPath, event.TokenName, event)
++}
++
++func EnqueueUsage(event UsageEvent) {
++	enqueue(usagePath, event.TokenName, event)
++}
++
++func enqueue(path string, tokenName string, payload interface{}) {
++	c := getConfig()
++	if !c.enabled {
++		return
++	}
++	if _, excluded := c.excluded[tokenName]; excluded {
++		return
++	}
++	body, err := json.Marshal(payload)
++	if err != nil {
++		log.Printf("audit: marshal event failed: %v", err)
++		return
++	}
++	select {
++	case queue <- outboundEvent{path: path, body: body}:
++	default:
++		log.Printf("audit: queue full, dropping event path=%s", path)
++	}
++}
++
++func getConfig() config {
++	initOnce.Do(initConfig)
++	return cfg
++}
++
++func initConfig() {
++	queueSize := getenvInt("AUDIT_QUEUE_SIZE", 10000)
++	cfg = config{
++		enabled:  getenvBool("AUDIT_ENABLED", false),
++		endpoint: strings.TrimRight(os.Getenv("AUDIT_ENDPOINT"), "/"),
++		secret:   os.Getenv("AUDIT_SECRET"),
++		timeout:  time.Duration(getenvInt("AUDIT_TIMEOUT_MS", 800)) * time.Millisecond,
++		excluded: parseExcluded(os.Getenv("AUDIT_EXCLUDED_TOKEN_NAMES")),
++	}
++	if queueSize <= 0 {
++		queueSize = 10000
++	}
++	queue = make(chan outboundEvent, queueSize)
++	if !cfg.enabled {
++		return
++	}
++	if cfg.endpoint == "" || cfg.secret == "" {
++		cfg.enabled = false
++		log.Printf("audit: disabled because AUDIT_ENDPOINT or AUDIT_SECRET is empty")
++		return
++	}
++	go worker(cfg)
++}
++
++func worker(c config) {
++	client := &http.Client{Timeout: c.timeout}
++	for event := range queue {
++		ts := strconv.FormatInt(time.Now().Unix(), 10)
++		signature := sign(c.secret, ts, event.body)
++		req, err := http.NewRequest(http.MethodPost, c.endpoint+event.path, bytes.NewReader(event.body))
++		if err != nil {
++			log.Printf("audit: build request failed: %v", err)
++			continue
++		}
++		req.Header.Set("Content-Type", "application/json")
++		req.Header.Set("X-Audit-Timestamp", ts)
++		req.Header.Set("X-Audit-Signature", signature)
++		resp, err := client.Do(req)
++		if err != nil {
++			log.Printf("audit: send failed: %v", err)
++			continue
++		}
++		if resp.Body != nil {
++			_ = resp.Body.Close()
++		}
++		if resp.StatusCode >= 400 {
++			log.Printf("audit: endpoint returned status=%d path=%s", resp.StatusCode, event.path)
++		}
++	}
++}
++
++func sign(secret string, timestamp string, body []byte) string {
++	mac := hmac.New(sha256.New, []byte(secret))
++	mac.Write([]byte(timestamp))
++	mac.Write([]byte("."))
++	mac.Write(body)
++	return hex.EncodeToString(mac.Sum(nil))
++}
++
++func getenvBool(name string, defaultValue bool) bool {
++	raw := strings.TrimSpace(os.Getenv(name))
++	if raw == "" {
++		return defaultValue
++	}
++	switch strings.ToLower(raw) {
++	case "1", "true", "yes", "y", "on":
++		return true
++	default:
++		return false
++	}
++}
++
++func getenvInt(name string, defaultValue int) int {
++	raw := strings.TrimSpace(os.Getenv(name))
++	if raw == "" {
++		return defaultValue
++	}
++	value, err := strconv.Atoi(raw)
++	if err != nil {
++		return defaultValue
++	}
++	return value
++}
++
++func parseExcluded(raw string) map[string]struct{} {
++	result := map[string]struct{}{}
++	for _, item := range strings.Split(raw, ",") {
++		item = strings.TrimSpace(item)
++		if item != "" {
++			result[item] = struct{}{}
++		}
++	}
++	return result
++}
+diff --git a/controller/relay.go b/controller/relay.go
+index 8dccfe76..bba5a469 100644
+--- a/controller/relay.go
++++ b/controller/relay.go
+@@ -9,6 +9,7 @@ import (
+ 	"strings"
+ 	"time"
+ 
++	"github.com/QuantumNous/new-api/audit"
+ 	"github.com/QuantumNous/new-api/common"
+ 	"github.com/QuantumNous/new-api/constant"
+ 	taskdto "github.com/QuantumNous/new-api/dto"
+@@ -128,14 +129,34 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
+ 
+ 	needSensitiveCheck := setting.ShouldCheckPromptSensitive()
+ 	needCountToken := constant.CountToken
++	needAuditPrompt := audit.EnabledForToken(c.GetString("token_name"))
+ 	// Avoid building huge CombineText (strings.Join) when token counting and sensitive check are both disabled.
+ 	var meta *types.TokenCountMeta
+-	if needSensitiveCheck || needCountToken {
++	if needSensitiveCheck || needCountToken || needAuditPrompt {
+ 		meta = request.GetTokenCountMeta()
+ 	} else {
+ 		meta = fastTokenCountMetaForPricing(request)
+ 	}
+ 
++	if needAuditPrompt && meta != nil {
++		promptText := meta.CombineText
++		audit.EnqueueRequest(audit.RequestEvent{
++			RequestId:     requestId,
++			CreatedAt:     time.Now().UTC().Format(time.RFC3339Nano),
++			UserId:        relayInfo.UserId,
++			Username:      c.GetString("username"),
++			TokenId:       relayInfo.TokenId,
++			TokenName:     c.GetString("token_name"),
++			ModelName:     relayInfo.OriginModelName,
++			RequestPath:   c.Request.URL.Path,
++			RelayFormat:   string(relayFormat),
++			IsStream:      relayInfo.IsStream,
++			PromptHash:    audit.HashText(promptText),
++			PromptPreview: audit.PreviewText(promptText, 500),
++			PromptText:    promptText,
++		})
++	}
++
+ 	if needSensitiveCheck && meta != nil {
+ 		contains, words := service.CheckSensitiveText(meta.CombineText)
+ 		if contains {
+diff --git a/model/log.go b/model/log.go
+index 1d2b38fc..b5fca1e0 100644
+--- a/model/log.go
++++ b/model/log.go
+@@ -7,6 +7,7 @@ import (
+ 	"strings"
+ 	"time"
+ 
++	"github.com/QuantumNous/new-api/audit"
+ 	"github.com/QuantumNous/new-api/common"
+ 	"github.com/QuantumNous/new-api/logger"
+ 	"github.com/QuantumNous/new-api/types"
+@@ -342,6 +343,7 @@ type RecordConsumeLogParams struct {
+ 
+ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams) {
+ 	if !common.LogConsumeEnabled {
++		enqueueAuditUsage(c, userId, params)
+ 		return
+ 	}
+ 	logger.LogInfo(c, fmt.Sprintf("record consume log: userId=%d, params=%s", userId, common.GetJsonString(params)))
+@@ -387,6 +389,7 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
+ 	if err != nil {
+ 		logger.LogError(c, "failed to record log: "+err.Error())
+ 	}
++	enqueueAuditUsage(c, userId, params)
+ 	if common.DataExportEnabled {
+ 		LogQuotaData(QuotaDataLogParams{
+ 			UserID:    userId,
+@@ -403,6 +406,26 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
+ 	}
+ }
+ 
++func enqueueAuditUsage(c *gin.Context, userId int, params RecordConsumeLogParams) {
++	audit.EnqueueUsage(audit.UsageEvent{
++		RequestId:         c.GetString(common.RequestIdKey),
++		CreatedAt:         time.Now().UTC().Format(time.RFC3339Nano),
++		UserId:            userId,
++		Username:          c.GetString("username"),
++		TokenId:           params.TokenId,
++		TokenName:         params.TokenName,
++		ModelName:         params.ModelName,
++		PromptTokens:      params.PromptTokens,
++		CompletionTokens:  params.CompletionTokens,
++		Quota:             params.Quota,
++		ChannelId:         params.ChannelId,
++		Group:             params.Group,
++		UseTimeSeconds:    params.UseTimeSeconds,
++		IsStream:          params.IsStream,
++		UpstreamRequestId: c.GetString(common.UpstreamRequestIdKey),
++	})
++}
++
+ type RecordTaskBillingLogParams struct {
+ 	UserId    int
+ 	LogType   int
+-- 
+2.53.0
+

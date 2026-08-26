@@ -1,0 +1,301 @@
+From 68bc884214e71b1ad67416d52e7b13b3b30b2de9 Mon Sep 17 00:00:00 2001
+From: Audit Patch Bot <audit-patch@example.invalid>
+Date: Wed, 26 Aug 2026 16:17:38 +0800
+Subject: [PATCH] feat: harden audit sender
+
+---
+ audit/sender.go      |  82 +++++++++++++++++++++-----
+ audit/sender_test.go | 135 +++++++++++++++++++++++++++++++++++++++++++
+ 2 files changed, 203 insertions(+), 14 deletions(-)
+ create mode 100644 audit/sender_test.go
+
+diff --git a/audit/sender.go b/audit/sender.go
+index 7fc949f0..58954973 100644
+--- a/audit/sender.go
++++ b/audit/sender.go
+@@ -13,6 +13,7 @@ import (
+ 	"strings"
+ 	"sync"
+ 	"time"
++	"unicode/utf8"
+ )
+ 
+ const (
+@@ -34,6 +35,8 @@ type RequestEvent struct {
+ 	PromptHash    string `json:"prompt_hash"`
+ 	PromptPreview string `json:"prompt_preview"`
+ 	PromptText    string `json:"prompt_text"`
++	PromptLen     int    `json:"prompt_len,omitempty"`
++	PromptOmitted bool   `json:"prompt_omitted,omitempty"`
+ }
+ 
+ type UsageEvent struct {
+@@ -55,11 +58,12 @@ type UsageEvent struct {
+ }
+ 
+ type config struct {
+-	enabled  bool
+-	endpoint string
+-	secret   string
+-	timeout  time.Duration
+-	excluded map[string]struct{}
++	enabled       bool
++	endpoint      string
++	secret        string
++	timeout       time.Duration
++	maxEventBytes int
++	excluded      map[string]struct{}
+ }
+ 
+ type outboundEvent struct {
+@@ -89,17 +93,27 @@ func HashText(text string) string {
+ 
+ func PreviewText(text string, limit int) string {
+ 	compact := strings.Join(strings.Fields(strings.ReplaceAll(text, "\r", "\n")), " ")
+-	if len(compact) <= limit {
++	if limit <= 0 || len(compact) <= limit {
+ 		return compact
+ 	}
+-	return compact[:limit] + "..."
++	runes := []rune(compact)
++	if len(runes) <= limit {
++		return compact
++	}
++	return string(runes[:limit]) + "..."
+ }
+ 
+ func EnqueueRequest(event RequestEvent) {
++	if strings.TrimSpace(event.RequestId) == "" {
++		return
++	}
+ 	enqueue(requestPath, event.TokenName, event)
+ }
+ 
+ func EnqueueUsage(event UsageEvent) {
++	if strings.TrimSpace(event.RequestId) == "" {
++		return
++	}
+ 	enqueue(usagePath, event.TokenName, event)
+ }
+ 
+@@ -116,6 +130,15 @@ func enqueue(path string, tokenName string, payload interface{}) {
+ 		log.Printf("audit: marshal event failed: %v", err)
+ 		return
+ 	}
++	if c.maxEventBytes > 0 && len(body) > c.maxEventBytes {
++		compacted, compactedSize, ok := compactOversizedEvent(path, payload, c.maxEventBytes)
++		if !ok {
++			log.Printf("audit: event too large, dropping event path=%s size=%d max=%d", path, len(body), c.maxEventBytes)
++			return
++		}
++		log.Printf("audit: event too large, sending compacted event path=%s original_size=%d compacted_size=%d max=%d", path, len(body), compactedSize, c.maxEventBytes)
++		body = compacted
++	}
+ 	select {
+ 	case queue <- outboundEvent{path: path, body: body}:
+ 	default:
+@@ -123,22 +146,53 @@ func enqueue(path string, tokenName string, payload interface{}) {
+ 	}
+ }
+ 
++func compactOversizedEvent(path string, payload interface{}, maxEventBytes int) ([]byte, int, bool) {
++	if path != requestPath {
++		return nil, 0, false
++	}
++	event, ok := payload.(RequestEvent)
++	if !ok {
++		return nil, 0, false
++	}
++	if event.PromptLen <= 0 {
++		event.PromptLen = utf8.RuneCountInString(event.PromptText)
++	}
++	if event.PromptHash == "" {
++		event.PromptHash = HashText(event.PromptText)
++	}
++	if event.PromptPreview == "" {
++		event.PromptPreview = PreviewText(event.PromptText, 500)
++	}
++	event.PromptText = ""
++	event.PromptOmitted = true
++	body, err := json.Marshal(event)
++	if err != nil {
++		log.Printf("audit: compact oversized request event failed: %v", err)
++		return nil, 0, false
++	}
++	if maxEventBytes > 0 && len(body) > maxEventBytes {
++		return nil, len(body), false
++	}
++	return body, len(body), true
++}
++
+ func getConfig() config {
+ 	initOnce.Do(initConfig)
+ 	return cfg
+ }
+ 
+ func initConfig() {
+-	queueSize := getenvInt("AUDIT_QUEUE_SIZE", 10000)
++	queueSize := getenvInt("AUDIT_QUEUE_SIZE", 1000)
+ 	cfg = config{
+-		enabled:  getenvBool("AUDIT_ENABLED", false),
+-		endpoint: strings.TrimRight(os.Getenv("AUDIT_ENDPOINT"), "/"),
+-		secret:   os.Getenv("AUDIT_SECRET"),
+-		timeout:  time.Duration(getenvInt("AUDIT_TIMEOUT_MS", 800)) * time.Millisecond,
+-		excluded: parseExcluded(os.Getenv("AUDIT_EXCLUDED_TOKEN_NAMES")),
++		enabled:       getenvBool("AUDIT_ENABLED", false),
++		endpoint:      strings.TrimRight(os.Getenv("AUDIT_ENDPOINT"), "/"),
++		secret:        os.Getenv("AUDIT_SECRET"),
++		timeout:       time.Duration(getenvInt("AUDIT_TIMEOUT_MS", 800)) * time.Millisecond,
++		maxEventBytes: getenvInt("AUDIT_MAX_EVENT_BYTES", 1024*1024),
++		excluded:      parseExcluded(os.Getenv("AUDIT_EXCLUDED_TOKEN_NAMES")),
+ 	}
+ 	if queueSize <= 0 {
+-		queueSize = 10000
++		queueSize = 1000
+ 	}
+ 	queue = make(chan outboundEvent, queueSize)
+ 	if !cfg.enabled {
+diff --git a/audit/sender_test.go b/audit/sender_test.go
+new file mode 100644
+index 00000000..68c77bc4
+--- /dev/null
++++ b/audit/sender_test.go
+@@ -0,0 +1,135 @@
++package audit
++
++import (
++	"encoding/json"
++	"strings"
++	"sync"
++	"testing"
++	"time"
++	"unicode/utf8"
++)
++
++func useTestConfig(c config, q chan outboundEvent) {
++	initOnce = sync.Once{}
++	initOnce.Do(func() {
++		cfg = c
++		queue = q
++	})
++}
++
++func TestEnqueueDropsWhenQueueIsFull(t *testing.T) {
++	q := make(chan outboundEvent, 1)
++	useTestConfig(config{enabled: true, excluded: map[string]struct{}{}}, q)
++
++	EnqueueUsage(UsageEvent{RequestId: "req-1"})
++
++	done := make(chan struct{})
++	go func() {
++		EnqueueUsage(UsageEvent{RequestId: "req-2"})
++		close(done)
++	}()
++
++	select {
++	case <-done:
++	case <-time.After(100 * time.Millisecond):
++		t.Fatal("enqueue blocked when queue was full")
++	}
++}
++
++func TestEnqueueDropsRequestWithoutRequestId(t *testing.T) {
++	q := make(chan outboundEvent, 1)
++	useTestConfig(config{enabled: true, excluded: map[string]struct{}{}}, q)
++
++	EnqueueRequest(RequestEvent{RequestId: " \t\n", PromptText: "hello"})
++
++	select {
++	case event := <-q:
++		t.Fatalf("expected request without request_id to be dropped, got %s", event.path)
++	default:
++	}
++}
++
++func TestEnqueueDropsUsageWithoutRequestId(t *testing.T) {
++	q := make(chan outboundEvent, 1)
++	useTestConfig(config{enabled: true, excluded: map[string]struct{}{}}, q)
++
++	EnqueueUsage(UsageEvent{RequestId: ""})
++
++	select {
++	case event := <-q:
++		t.Fatalf("expected usage without request_id to be dropped, got %s", event.path)
++	default:
++	}
++}
++
++func TestEnqueueDropsOversizedEvent(t *testing.T) {
++	q := make(chan outboundEvent, 1)
++	useTestConfig(config{enabled: true, maxEventBytes: 64, excluded: map[string]struct{}{}}, q)
++
++	EnqueueRequest(RequestEvent{
++		RequestId:  "req-large",
++		PromptText: "this prompt is intentionally long enough to exceed the tiny test limit",
++	})
++
++	select {
++	case event := <-q:
++		t.Fatalf("expected oversized event to be dropped, got %s", event.path)
++	default:
++	}
++}
++
++func TestEnqueueCompactsOversizedRequestEvent(t *testing.T) {
++	q := make(chan outboundEvent, 1)
++	useTestConfig(config{enabled: true, maxEventBytes: 1200, excluded: map[string]struct{}{}}, q)
++
++	largePrompt := strings.Repeat("x", 5000)
++	EnqueueRequest(RequestEvent{
++		RequestId:     "req-large",
++		UserId:        7,
++		Username:      "alice",
++		TokenId:       11,
++		TokenName:     "coding",
++		ModelName:     "gpt-test",
++		PromptHash:    HashText(largePrompt),
++		PromptPreview: PreviewText(largePrompt, 500),
++		PromptText:    largePrompt,
++	})
++
++	select {
++	case event := <-q:
++		if event.path != requestPath {
++			t.Fatalf("unexpected path: %s", event.path)
++		}
++		if len(event.body) > 1200 {
++			t.Fatalf("compacted event is still too large: %d", len(event.body))
++		}
++		var payload RequestEvent
++		if err := json.Unmarshal(event.body, &payload); err != nil {
++			t.Fatalf("failed to unmarshal compacted event: %v", err)
++		}
++		if !payload.PromptOmitted {
++			t.Fatal("expected prompt_omitted=true")
++		}
++		if payload.PromptText != "" {
++			t.Fatal("expected prompt_text to be omitted")
++		}
++		if payload.PromptLen != 5000 {
++			t.Fatalf("unexpected prompt_len: %d", payload.PromptLen)
++		}
++		if payload.PromptPreview == "" || payload.PromptHash == "" {
++			t.Fatal("expected preview and hash to be preserved")
++		}
++	default:
++		t.Fatal("expected compacted request event to be queued")
++	}
++}
++
++func TestPreviewTextDoesNotSplitMultibyteCharacters(t *testing.T) {
++	preview := PreviewText("你好 世界 测试", 4)
++	if !utf8.ValidString(preview) {
++		t.Fatalf("preview is not valid utf-8: %q", preview)
++	}
++	if preview != "你好 世..." {
++		t.Fatalf("unexpected preview: %q", preview)
++	}
++}
+-- 
+2.53.0
+

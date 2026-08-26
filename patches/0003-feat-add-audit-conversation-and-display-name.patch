@@ -1,0 +1,219 @@
+From 7e5cfe5e14271266ef403f26d085b1e235eb07e7 Mon Sep 17 00:00:00 2001
+From: Audit Patch Bot <audit-patch@example.invalid>
+Date: Wed, 26 Aug 2026 16:17:38 +0800
+Subject: [PATCH] feat: add audit conversation and display name
+
+---
+ audit/sender.go      | 48 +++++++++++++++++++++++++++++-------------
+ audit/sender_test.go | 12 +++++++++++
+ controller/relay.go  | 50 ++++++++++++++++++++++++++++++++------------
+ model/user.go        |  1 +
+ model/user_cache.go  |  4 +++-
+ 5 files changed, 86 insertions(+), 29 deletions(-)
+
+diff --git a/audit/sender.go b/audit/sender.go
+index 58954973..532c14f5 100644
+--- a/audit/sender.go
++++ b/audit/sender.go
+@@ -22,21 +22,24 @@ const (
+ )
+ 
+ type RequestEvent struct {
+-	RequestId     string `json:"request_id"`
+-	CreatedAt     string `json:"created_at"`
+-	UserId        int    `json:"user_id"`
+-	Username      string `json:"username"`
+-	TokenId       int    `json:"token_id"`
+-	TokenName     string `json:"token_name"`
+-	ModelName     string `json:"model_name"`
+-	RequestPath   string `json:"request_path"`
+-	RelayFormat   string `json:"relay_format"`
+-	IsStream      bool   `json:"is_stream"`
+-	PromptHash    string `json:"prompt_hash"`
+-	PromptPreview string `json:"prompt_preview"`
+-	PromptText    string `json:"prompt_text"`
+-	PromptLen     int    `json:"prompt_len,omitempty"`
+-	PromptOmitted bool   `json:"prompt_omitted,omitempty"`
++	RequestId          string `json:"request_id"`
++	CreatedAt          string `json:"created_at"`
++	UserId             int    `json:"user_id"`
++	Username           string `json:"username"`
++	TokenId            int    `json:"token_id"`
++	TokenName          string `json:"token_name"`
++	ModelName          string `json:"model_name"`
++	RequestPath        string `json:"request_path"`
++	RelayFormat        string `json:"relay_format"`
++	IsStream           bool   `json:"is_stream"`
++	PromptHash         string `json:"prompt_hash"`
++	PromptPreview      string `json:"prompt_preview"`
++	PromptText         string `json:"prompt_text"`
++	PromptLen          int    `json:"prompt_len,omitempty"`
++	PromptOmitted      bool   `json:"prompt_omitted,omitempty"`
++	ConversationID     string `json:"conversation_id,omitempty"`
++	ConversationSource string `json:"conversation_source,omitempty"`
++	UserDisplayName    string `json:"user_display_name,omitempty"`
+ }
+ 
+ type UsageEvent struct {
+@@ -91,6 +94,21 @@ func HashText(text string) string {
+ 	return hex.EncodeToString(sum[:])
+ }
+ 
++func ConversationID(raw string) string {
++	raw = strings.TrimSpace(raw)
++	if raw == "" {
++		return ""
++	}
++	c := getConfig()
++	if c.secret == "" {
++		return ""
++	}
++	mac := hmac.New(sha256.New, []byte(c.secret))
++	mac.Write([]byte("new-api-audit/conversation\x00"))
++	mac.Write([]byte(raw))
++	return hex.EncodeToString(mac.Sum(nil))
++}
++
+ func PreviewText(text string, limit int) string {
+ 	compact := strings.Join(strings.Fields(strings.ReplaceAll(text, "\r", "\n")), " ")
+ 	if limit <= 0 || len(compact) <= limit {
+diff --git a/audit/sender_test.go b/audit/sender_test.go
+index 68c77bc4..a6081a84 100644
+--- a/audit/sender_test.go
++++ b/audit/sender_test.go
+@@ -7,6 +7,8 @@ import (
+ 	"testing"
+ 	"time"
+ 	"unicode/utf8"
++
++	"github.com/stretchr/testify/require"
+ )
+ 
+ func useTestConfig(c config, q chan outboundEvent) {
+@@ -133,3 +135,13 @@ func TestPreviewTextDoesNotSplitMultibyteCharacters(t *testing.T) {
+ 		t.Fatalf("unexpected preview: %q", preview)
+ 	}
+ }
++
++func TestConversationIDIsSecretBoundAndDoesNotExposeSource(t *testing.T) {
++	useTestConfig(config{secret: "first-secret"}, make(chan outboundEvent, 1))
++	first := ConversationID("sess-sensitive-value")
++	require.Len(t, first, 64)
++	require.NotContains(t, first, "sess-sensitive-value")
++
++	useTestConfig(config{secret: "second-secret"}, make(chan outboundEvent, 1))
++	require.NotEqual(t, first, ConversationID("sess-sensitive-value"))
++}
+diff --git a/controller/relay.go b/controller/relay.go
+index bba5a469..d3251628 100644
+--- a/controller/relay.go
++++ b/controller/relay.go
+@@ -140,20 +140,24 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
+ 
+ 	if needAuditPrompt && meta != nil {
+ 		promptText := meta.CombineText
++		conversationID, conversationSource := auditConversation(c, request)
+ 		audit.EnqueueRequest(audit.RequestEvent{
+-			RequestId:     requestId,
+-			CreatedAt:     time.Now().UTC().Format(time.RFC3339Nano),
+-			UserId:        relayInfo.UserId,
+-			Username:      c.GetString("username"),
+-			TokenId:       relayInfo.TokenId,
+-			TokenName:     c.GetString("token_name"),
+-			ModelName:     relayInfo.OriginModelName,
+-			RequestPath:   c.Request.URL.Path,
+-			RelayFormat:   string(relayFormat),
+-			IsStream:      relayInfo.IsStream,
+-			PromptHash:    audit.HashText(promptText),
+-			PromptPreview: audit.PreviewText(promptText, 500),
+-			PromptText:    promptText,
++			RequestId:          requestId,
++			CreatedAt:          time.Now().UTC().Format(time.RFC3339Nano),
++			UserId:             relayInfo.UserId,
++			Username:           c.GetString("username"),
++			TokenId:            relayInfo.TokenId,
++			TokenName:          c.GetString("token_name"),
++			ModelName:          relayInfo.OriginModelName,
++			RequestPath:        c.Request.URL.Path,
++			RelayFormat:        string(relayFormat),
++			IsStream:           relayInfo.IsStream,
++			PromptHash:         audit.HashText(promptText),
++			PromptPreview:      audit.PreviewText(promptText, 500),
++			PromptText:         promptText,
++			ConversationID:     conversationID,
++			ConversationSource: conversationSource,
++			UserDisplayName:    c.GetString("display_name"),
+ 		})
+ 	}
+ 
+@@ -276,6 +280,26 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
+ 	}
+ }
+ 
++func auditConversation(c *gin.Context, request dto.Request) (string, string) {
++	if value := strings.TrimSpace(c.GetHeader("Session_id")); value != "" {
++		return audit.ConversationID(value), "session_id"
++	}
++
++	var value string
++	switch req := request.(type) {
++	case *dto.GeneralOpenAIRequest:
++		value = req.PromptCacheKey
++	case *dto.OpenAIResponsesRequest:
++		if len(req.PromptCacheKey) > 0 {
++			_ = common.Unmarshal(req.PromptCacheKey, &value)
++		}
++	}
++	if strings.TrimSpace(value) == "" {
++		return "", ""
++	}
++	return audit.ConversationID(value), "prompt_cache_key"
++}
++
+ var upgrader = websocket.Upgrader{
+ 	Subprotocols: []string{"realtime"}, // WS 握手支持的协议，如果有使用 Sec-WebSocket-Protocol，则必须在此声明对应的 Protocol TODO add other protocol
+ 	CheckOrigin: func(r *http.Request) bool {
+diff --git a/model/user.go b/model/user.go
+index 7bc060ad..2ee1f9cb 100644
+--- a/model/user.go
++++ b/model/user.go
+@@ -120,6 +120,7 @@ func (user *User) ToBaseUser() *UserBase {
+ 		Status:      user.Status,
+ 		Role:        user.Role,
+ 		Username:    user.Username,
++		DisplayName: user.DisplayName,
+ 		Setting:     user.Setting,
+ 		Email:       user.Email,
+ 		AuthVersion: user.AuthVersion,
+diff --git a/model/user_cache.go b/model/user_cache.go
+index e8996e9b..43f23cac 100644
+--- a/model/user_cache.go
++++ b/model/user_cache.go
+@@ -11,7 +11,7 @@ import (
+ 	"github.com/gin-gonic/gin"
+ )
+ 
+-const userCacheSchemaVersion = 2
++const userCacheSchemaVersion = 3
+ 
+ type UserBase struct {
+ 	Id          int    `json:"id"`
+@@ -21,6 +21,7 @@ type UserBase struct {
+ 	Status      int    `json:"status"`
+ 	Role        int    `json:"role"`
+ 	Username    string `json:"username"`
++	DisplayName string `json:"display_name"`
+ 	Setting     string `json:"setting"`
+ 	AuthVersion int64  `json:"-"`
+ 	CacheSchema int    `json:"-"`
+@@ -32,6 +33,7 @@ func (user *UserBase) WriteContext(c *gin.Context) {
+ 	common.SetContextKey(c, constant.ContextKeyUserStatus, user.Status)
+ 	common.SetContextKey(c, constant.ContextKeyUserEmail, user.Email)
+ 	common.SetContextKey(c, constant.ContextKeyUserName, user.Username)
++	c.Set("display_name", user.DisplayName)
+ 	common.SetContextKey(c, constant.ContextKeyUserSetting, user.GetSetting())
+ }
+ 
+-- 
+2.53.0
+
