@@ -19,3 +19,11 @@
 - [审计事件契约](docs/zh/webhook.md) — 外部系统如何获取审计数据（端点、验签、事件字段）
 
 英文版：[usage](docs/en/usage.md) · [webhook](docs/en/webhook.md)
+
+## 许可证
+
+`patches/*.patch` 是 AGPL-3.0 上游 [QuantumNous/new-api](https://github.com/QuantumNous/new-api) 的衍生作品，以 GNU Affero General Public License v3.0 分发。本仓库其余内容同样统一以 AGPL-3.0 提供。见 [LICENSE](LICENSE)。
+
+已发布镜像包含 AGPL-3.0 软件，部署者受 AGPL 第 13 节约束：若修改网关并对外提供网络服务，必须以 AGPL-3.0 公开你的修改源码。
+
+完整对应源码 = 上游仓库 + 本补丁队列；重建步骤见 [docs/zh/usage.md](docs/zh/usage.md)。
