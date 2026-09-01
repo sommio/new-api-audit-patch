@@ -146,7 +146,7 @@ index 7fc949f0..58954973 100644
 +		endpoint:      strings.TrimRight(os.Getenv("AUDIT_ENDPOINT"), "/"),
 +		secret:        os.Getenv("AUDIT_SECRET"),
 +		timeout:       time.Duration(getenvInt("AUDIT_TIMEOUT_MS", 800)) * time.Millisecond,
-+		maxEventBytes: getenvInt("AUDIT_MAX_EVENT_BYTES", 1024*1024),
++		maxEventBytes: getenvInt("AUDIT_MAX_EVENT_BYTES", 128*1024*1024),
 +		excluded:      parseExcluded(os.Getenv("AUDIT_EXCLUDED_TOKEN_NAMES")),
  	}
  	if queueSize <= 0 {
@@ -298,4 +298,3 @@ index 00000000..68c77bc4
 +}
 -- 
 2.53.0
-

@@ -32,7 +32,7 @@ ghcr.io/sommio/new-api-audit-patch
 | `AUDIT_SECRET` | 空 | 是 | 与接收端共享的 HMAC 密钥，用于验签与 conversation_id 派生 |
 | `AUDIT_TIMEOUT_MS` | `800` | 否 | 单次发送 HTTP 超时（毫秒） |
 | `AUDIT_QUEUE_SIZE` | `1000` | 否 | 发送队列容量；满则丢弃新事件并记日志 |
-| `AUDIT_MAX_EVENT_BYTES` | `1048576` | 否 | 单事件大小上限（字节）；超限行为见"超限压缩" |
+| `AUDIT_MAX_EVENT_BYTES` | `134217728` | 否 | 单事件大小上限（字节，128 MiB）；超限行为见"超限压缩" |
 | `AUDIT_EXCLUDED_TOKEN_NAMES` | 空 | 否 | 逗号分隔的 token 名称，命中则不发送任何事件 |
 
 开启条件：`AUDIT_ENABLED=true` 且 `AUDIT_ENDPOINT`、`AUDIT_SECRET` 均非空；否则审计完全关闭，中继路径零开销（不构建完整 prompt 文本）。

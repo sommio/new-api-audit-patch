@@ -32,7 +32,7 @@ ghcr.io/sommio/new-api-audit-patch
 | `AUDIT_SECRET` | empty | Yes | HMAC secret shared with the receiver; used for signature verification and `conversation_id` derivation |
 | `AUDIT_TIMEOUT_MS` | `800` | No | Per-request HTTP timeout in milliseconds |
 | `AUDIT_QUEUE_SIZE` | `1000` | No | Outbound queue capacity; when full, new events are dropped and logged |
-| `AUDIT_MAX_EVENT_BYTES` | `1048576` | No | Per-event size limit in bytes; see "Oversize compaction" |
+| `AUDIT_MAX_EVENT_BYTES` | `134217728` | No | Per-event size limit in bytes (128 MiB); see "Oversize compaction" |
 | `AUDIT_EXCLUDED_TOKEN_NAMES` | empty | No | Comma-separated token names; matching tokens emit no events |
 
 Audit is active only when `AUDIT_ENABLED=true` and both `AUDIT_ENDPOINT` and `AUDIT_SECRET` are non-empty. Otherwise it is fully off and the relay path keeps its zero overhead (no full prompt text is built).
