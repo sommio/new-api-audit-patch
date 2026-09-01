@@ -1,0 +1,110 @@
+From 4585182733f7bb30afeb7e0d958a9584d72b86de Mon Sep 17 00:00:00 2001
+From: sommio <sommio.mail@gmail.com>
+Date: Tue, 1 Sep 2026 18:23:35 +0800
+Subject: [PATCH] =?UTF-8?q?feat(audit):=20=E4=BF=9D=E7=95=99=20Responses?=
+ =?UTF-8?q?=20=E8=A7=92=E8=89=B2=E6=B6=88=E6=81=AF?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+---
+ controller/relay.go            | 39 ++++++++++++++++++++++++++++++----
+ controller/relay_audit_test.go | 22 +++++++++++++++++++
+ 2 files changed, 57 insertions(+), 4 deletions(-)
+
+diff --git a/controller/relay.go b/controller/relay.go
+index 7656505e..a15616d1 100644
+--- a/controller/relay.go
++++ b/controller/relay.go
+@@ -289,9 +289,6 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
+ }
+ 
+ func auditMessages(c *gin.Context, request dto.Request, relayMode int) (json.RawMessage, string) {
+-	if relayMode != relayconstant.RelayModeChatCompletions {
+-		return nil, "raw_only"
+-	}
+ 	storage, err := common.GetBodyStorage(c)
+ 	if err != nil {
+ 		return nil, "unreadable"
+@@ -300,7 +297,14 @@ func auditMessages(c *gin.Context, request dto.Request, relayMode int) (json.Raw
+ 	if err != nil {
+ 		return nil, "unreadable"
+ 	}
+-	return extractChatMessages(request, body)
++	switch relayMode {
++	case relayconstant.RelayModeChatCompletions:
++		return extractChatMessages(request, body)
++	case relayconstant.RelayModeResponses, relayconstant.RelayModeResponsesCompact:
++		return extractResponsesMessages(request, body)
++	default:
++		return nil, "raw_only"
++	}
+ }
+ 
+ func extractChatMessages(request dto.Request, body []byte) (json.RawMessage, string) {
+@@ -326,6 +330,33 @@ func extractChatMessages(request dto.Request, body []byte) (json.RawMessage, str
+ 	return envelope.Messages, "available"
+ }
+ 
++func extractResponsesMessages(request dto.Request, body []byte) (json.RawMessage, string) {
++	if _, ok := request.(*dto.OpenAIResponsesRequest); !ok {
++		return nil, "raw_only"
++	}
++	var envelope struct {
++		Input json.RawMessage `json:"input"`
++	}
++	if err := json.Unmarshal(body, &envelope); err != nil {
++		return nil, "unreadable"
++	}
++	if len(envelope.Input) == 0 || string(envelope.Input) == "null" {
++		return nil, "raw_only"
++	}
++	var inputs []struct {
++		Role string `json:"role"`
++	}
++	if err := json.Unmarshal(envelope.Input, &inputs); err != nil || len(inputs) == 0 {
++		return nil, "raw_only"
++	}
++	for _, input := range inputs {
++		if strings.TrimSpace(input.Role) != "" {
++			return envelope.Input, "available"
++		}
++	}
++	return nil, "raw_only"
++}
++
+ func auditConversation(c *gin.Context, request dto.Request) (string, string) {
+ 	if value := strings.TrimSpace(c.GetHeader("Session_id")); value != "" {
+ 		return audit.ConversationID(value), "session_id"
+diff --git a/controller/relay_audit_test.go b/controller/relay_audit_test.go
+index b61c2a36..db2865c5 100644
+--- a/controller/relay_audit_test.go
++++ b/controller/relay_audit_test.go
+@@ -29,3 +29,25 @@ func TestExtractChatMessagesMarksNonRoleRequestsRawOnly(t *testing.T) {
+ 	require.Nil(t, messages)
+ 	require.Equal(t, "raw_only", status)
+ }
++
++func TestExtractResponsesMessagesPreservesOriginalRoleStructure(t *testing.T) {
++	body := []byte(`{"model":"gpt-test","input":[{"role":"developer","content":[{"type":"input_text","text":"constraints"}]},{"type":"function_call_output","call_id":"call-1","output":[{"type":"input_image","image_url":"https://example.test/image.png"}]},{"role":"user","content":[{"type":"input_file","file_id":"file-1"}]}]}`)
++	messages, status := extractResponsesMessages(&dto.OpenAIResponsesRequest{}, body)
++
++	require.Equal(t, "available", status)
++	var expected struct {
++		Input json.RawMessage `json:"input"`
++	}
++	require.NoError(t, json.Unmarshal(body, &expected))
++	require.JSONEq(t, string(expected.Input), string(messages))
++}
++
++func TestExtractResponsesMessagesMarksUnassignedInputRawOnly(t *testing.T) {
++	messages, status := extractResponsesMessages(&dto.OpenAIResponsesRequest{}, []byte(`{"input":"short hand"}`))
++	require.Nil(t, messages)
++	require.Equal(t, "raw_only", status)
++
++	messages, status = extractResponsesMessages(&dto.OpenAIResponsesRequest{}, []byte(`{"input":[{"type":"function_call_output","call_id":"call-1","output":"result"}]}`))
++	require.Nil(t, messages)
++	require.Equal(t, "raw_only", status)
++}
+-- 
+2.53.0
