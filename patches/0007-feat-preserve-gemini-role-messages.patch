@@ -1,0 +1,151 @@
+From 870facf1b558374c9d8822b6af5a03c42b2f40ba Mon Sep 17 00:00:00 2001
+From: sommio <sommio.mail@gmail.com>
+Date: Tue, 1 Sep 2026 18:37:54 +0800
+Subject: [PATCH] =?UTF-8?q?feat(audit):=20=E4=BF=9D=E7=95=99=20Gemini=20?=
+ =?UTF-8?q?=E8=A7=92=E8=89=B2=E6=B6=88=E6=81=AF?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+---
+ controller/relay.go            | 71 +++++++++++++++++++++++++++++++++-
+ controller/relay_audit_test.go | 27 +++++++++++++
+ 2 files changed, 97 insertions(+), 1 deletion(-)
+
+diff --git a/controller/relay.go b/controller/relay.go
+index 3222d77c..0baa834b 100644
+--- a/controller/relay.go
++++ b/controller/relay.go
+@@ -291,10 +291,15 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
+ func auditMessages(c *gin.Context, request dto.Request, relayFormat types.RelayFormat, relayMode int) (json.RawMessage, string) {
+ 	switch relayFormat {
+ 	case types.RelayFormatClaude:
+-	case types.RelayFormatOpenAI:
++	case types.RelayFormatOpenAI, types.RelayFormatGemini:
+ 	default:
+ 		return nil, "raw_only"
+ 	}
++	if relayFormat == types.RelayFormatGemini {
++		if _, ok := request.(*dto.GeminiChatRequest); !ok {
++			return nil, "raw_only"
++		}
++	}
+ 	storage, err := common.GetBodyStorage(c)
+ 	if err != nil {
+ 		return nil, "unreadable"
+@@ -306,6 +311,9 @@ func auditMessages(c *gin.Context, request dto.Request, relayFormat types.RelayF
+ 	if relayFormat == types.RelayFormatClaude {
+ 		return extractAnthropicMessages(request, body)
+ 	}
++	if relayFormat == types.RelayFormatGemini {
++		return extractGeminiMessages(request, body)
++	}
+ 	switch relayMode {
+ 	case relayconstant.RelayModeChatCompletions:
+ 		return extractChatMessages(request, body)
+@@ -426,6 +434,67 @@ func extractAnthropicMessages(request dto.Request, body []byte) (json.RawMessage
+ 	return result, "available"
+ }
+ 
++func extractGeminiMessages(request dto.Request, body []byte) (json.RawMessage, string) {
++	if _, ok := request.(*dto.GeminiChatRequest); !ok {
++		return nil, "raw_only"
++	}
++	var envelope struct {
++		SystemInstruction      json.RawMessage `json:"systemInstruction"`
++		SystemInstructionSnake json.RawMessage `json:"system_instruction"`
++		Contents               json.RawMessage `json:"contents"`
++	}
++	if err := json.Unmarshal(body, &envelope); err != nil {
++		return nil, "unreadable"
++	}
++
++	messages := make([]json.RawMessage, 0)
++	for _, instruction := range []json.RawMessage{envelope.SystemInstruction, envelope.SystemInstructionSnake} {
++		if len(instruction) == 0 || string(instruction) == "null" {
++			continue
++		}
++		system, err := json.Marshal(struct {
++			Role    string          `json:"role"`
++			Content json.RawMessage `json:"content"`
++		}{Role: "system", Content: instruction})
++		if err != nil {
++			return nil, "unreadable"
++		}
++		messages = append(messages, system)
++	}
++	if len(envelope.Contents) == 0 || string(envelope.Contents) == "null" {
++		if len(messages) == 0 {
++			return nil, "raw_only"
++		}
++		result, err := json.Marshal(messages)
++		if err != nil {
++			return nil, "unreadable"
++		}
++		return result, "available"
++	}
++
++	var contents []json.RawMessage
++	if err := json.Unmarshal(envelope.Contents, &contents); err != nil || len(contents) == 0 {
++		return nil, "raw_only"
++	}
++	for _, content := range contents {
++		var role struct {
++			Role string `json:"role"`
++		}
++		if err := json.Unmarshal(content, &role); err != nil {
++			return nil, "unreadable"
++		}
++		if role.Role != "user" && role.Role != "model" {
++			return nil, "raw_only"
++		}
++		messages = append(messages, content)
++	}
++	result, err := json.Marshal(messages)
++	if err != nil {
++		return nil, "unreadable"
++	}
++	return result, "available"
++}
++
+ func auditConversation(c *gin.Context, request dto.Request) (string, string) {
+ 	if value := strings.TrimSpace(c.GetHeader("Session_id")); value != "" {
+ 		return audit.ConversationID(value), "session_id"
+diff --git a/controller/relay_audit_test.go b/controller/relay_audit_test.go
+index ae5197e5..318d2330 100644
+--- a/controller/relay_audit_test.go
++++ b/controller/relay_audit_test.go
+@@ -74,3 +74,30 @@ func TestExtractAnthropicMessagesDoesNotGuessUnknownRoles(t *testing.T) {
+ 	require.Nil(t, messages)
+ 	require.Equal(t, "raw_only", status)
+ }
++
++func TestExtractGeminiMessagesPreservesSystemAndRoleStructure(t *testing.T) {
++	body := []byte(`{"systemInstruction":{"parts":[{"text":"policy","custom":{"keep":true}}]},"contents":[{"role":"user","parts":[{"text":"question"},{"inlineData":{"mimeType":"image/png","data":"abc"}}]},{"role":"model","parts":[{"functionCall":{"name":"lookup","args":{"q":"audit"}}}]},{"role":"user","parts":[{"functionResponse":{"name":"lookup","response":{"ok":true}}}]}]}`)
++	messages, status := extractGeminiMessages(&dto.GeminiChatRequest{}, body)
++
++	require.Equal(t, "available", status)
++	var expected struct {
++		SystemInstruction json.RawMessage   `json:"systemInstruction"`
++		Contents          []json.RawMessage `json:"contents"`
++	}
++	require.NoError(t, json.Unmarshal(body, &expected))
++	system, err := json.Marshal(map[string]json.RawMessage{"role": json.RawMessage(`"system"`), "content": expected.SystemInstruction})
++	require.NoError(t, err)
++	expectedMessages, err := json.Marshal(append([]json.RawMessage{system}, expected.Contents...))
++	require.NoError(t, err)
++	require.JSONEq(t, string(expectedMessages), string(messages))
++}
++
++func TestExtractGeminiMessagesMarksUnassignedOrNonConversationRequestsRawOnly(t *testing.T) {
++	messages, status := extractGeminiMessages(&dto.GeminiChatRequest{}, []byte(`{"contents":[{"parts":[{"text":"implicit user"}]}]}`))
++	require.Nil(t, messages)
++	require.Equal(t, "raw_only", status)
++
++	messages, status = extractGeminiMessages(&dto.GeminiEmbeddingRequest{}, []byte(`{"content":{"parts":[{"text":"embedding"}]}}`))
++	require.Nil(t, messages)
++	require.Equal(t, "raw_only", status)
++}
+-- 
+2.53.0
+
