@@ -56,14 +56,14 @@ def verify(secret: bytes, body: bytes, timestamp: str, signature: str) -> bool:
 | `prompt_omitted` | bool | 为 `true` 表示完整 prompt 被省略 |
 | `conversation_id` | string | HMAC 派生的 64 位 hex 会话标识；无会话来源时省略 |
 | `conversation_source` | string | `session_id` 或 `prompt_cache_key`；无来源时省略 |
-| `messages` | JSON 数组 | 原始、有序的 Chat Completions `messages` 数组，保留角色、内容块、工具调用和可保留的未知消息字段；仅当 `messages_status` 为 `available` 时出现 |
-| `messages_status` | string | 可提取的 Chat Completions 消息为 `available`；没有角色消息的端点为 `raw_only`；网关无法重读已验证请求体时为 `unreadable` |
+| `messages` | JSON 数组 | 原始、有序的 Chat Completions 或 Anthropic Messages 结构。Anthropic 顶层 `system` 作为首个 `{"role":"system","content":...}` 条目；随后原样保留全部消息角色、内容块、工具调用和可保留的未知消息字段；仅当 `messages_status` 为 `available` 时出现 |
+| `messages_status` | string | 可提取的 Chat Completions 或 Anthropic Messages 为 `available`；没有可验证角色消息的端点为 `raw_only`；网关无法重读已验证请求体时为 `unreadable` |
 
 `conversation_id` 派生：`hex(hmac_sha256("new-api-audit/conversation\0" + raw, AUDIT_SECRET))`。原始 `Session_id` 请求头 / `prompt_cache_key` 值绝不外发；轮换 `AUDIT_SECRET` 后同一会话的派生 ID 会变化。
 
 `conversation_source` 取值优先级：请求头 `Session_id` 非空 → `session_id`；否则 OpenAI Chat 请求的 `prompt_cache_key`、OpenAI Responses 请求的 `prompt_cache_key`（JSON 字符串）→ `prompt_cache_key`；都没有则不产生这两个字段。
 
-对于 Chat Completions，网关在使用 `CombineText` 或转换协议前提取原生请求 `messages` 数组，保留消息顺序和 JSON 结构，不从扁平文本推断角色。没有可验证角色消息模型的端点发送 `messages_status=raw_only`，不会把 Prompt 猜作用户轮次。
+对于 Chat Completions，网关在使用 `CombineText` 或转换协议前提取原生请求 `messages` 数组。对于 Anthropic Messages，网关把顶层 `system` 作为首个 `system` 角色条目，再按顺序保留原生 `messages` 的角色与内容结构。两种协议都不从扁平文本推断角色。没有可验证角色消息模型的端点，或 Anthropic 条目角色未知时，发送 `messages_status=raw_only`，不会把 Prompt 猜作用户轮次。
 
 ## usage 事件字段
 

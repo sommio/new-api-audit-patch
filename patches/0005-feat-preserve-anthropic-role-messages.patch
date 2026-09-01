@@ -1,0 +1,155 @@
+From d2880ad98808e5d98c6f074a6a75974cbd0a5a19 Mon Sep 17 00:00:00 2001
+From: sommio <sommio.mail@gmail.com>
+Date: Tue, 1 Sep 2026 18:24:21 +0800
+Subject: [PATCH] =?UTF-8?q?feat(audit):=20=E4=BF=9D=E7=95=99=20Anthropic?=
+ =?UTF-8?q?=20=E8=A7=92=E8=89=B2=E6=B6=88=E6=81=AF?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+---
+ controller/relay.go            | 75 ++++++++++++++++++++++++++++++++--
+ controller/relay_audit_test.go | 23 +++++++++++
+ 2 files changed, 95 insertions(+), 3 deletions(-)
+
+diff --git a/controller/relay.go b/controller/relay.go
+index 7656505e..c1bb0921 100644
+--- a/controller/relay.go
++++ b/controller/relay.go
+@@ -134,7 +134,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
+ 	var structuredMessages json.RawMessage
+ 	messagesStatus := "raw_only"
+ 	if needAuditPrompt {
+-		structuredMessages, messagesStatus = auditMessages(c, request, relayconstant.Path2RelayMode(c.Request.URL.Path))
++		structuredMessages, messagesStatus = auditMessages(c, request, relayFormat, relayconstant.Path2RelayMode(c.Request.URL.Path))
+ 	}
+ 	// Avoid building huge CombineText (strings.Join) when token counting and sensitive check are both disabled.
+ 	var meta *types.TokenCountMeta
+@@ -288,8 +288,14 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
+ 	}
+ }
+ 
+-func auditMessages(c *gin.Context, request dto.Request, relayMode int) (json.RawMessage, string) {
+-	if relayMode != relayconstant.RelayModeChatCompletions {
++func auditMessages(c *gin.Context, request dto.Request, relayFormat types.RelayFormat, relayMode int) (json.RawMessage, string) {
++	switch relayFormat {
++	case types.RelayFormatClaude:
++	case types.RelayFormatOpenAI:
++		if relayMode != relayconstant.RelayModeChatCompletions {
++			return nil, "raw_only"
++		}
++	default:
+ 		return nil, "raw_only"
+ 	}
+ 	storage, err := common.GetBodyStorage(c)
+@@ -300,6 +306,9 @@ func auditMessages(c *gin.Context, request dto.Request, relayMode int) (json.Raw
+ 	if err != nil {
+ 		return nil, "unreadable"
+ 	}
++	if relayFormat == types.RelayFormatClaude {
++		return extractAnthropicMessages(request, body)
++	}
+ 	return extractChatMessages(request, body)
+ }
+ 
+@@ -326,6 +335,66 @@ func extractChatMessages(request dto.Request, body []byte) (json.RawMessage, str
+ 	return envelope.Messages, "available"
+ }
+ 
++func extractAnthropicMessages(request dto.Request, body []byte) (json.RawMessage, string) {
++	if _, ok := request.(*dto.ClaudeRequest); !ok {
++		return nil, "raw_only"
++	}
++	var envelope struct {
++		System   json.RawMessage `json:"system"`
++		Messages json.RawMessage `json:"messages"`
++	}
++	if err := json.Unmarshal(body, &envelope); err != nil {
++		return nil, "unreadable"
++	}
++
++	messages := make([]json.RawMessage, 0)
++	if len(envelope.System) > 0 && string(envelope.System) != "null" {
++		system, err := json.Marshal(struct {
++			Role    string          `json:"role"`
++			Content json.RawMessage `json:"content"`
++		}{Role: "system", Content: envelope.System})
++		if err != nil {
++			return nil, "unreadable"
++		}
++		messages = append(messages, system)
++	}
++	if len(envelope.Messages) == 0 || string(envelope.Messages) == "null" {
++		if len(messages) == 0 {
++			return nil, "raw_only"
++		}
++		result, err := json.Marshal(messages)
++		if err != nil {
++			return nil, "unreadable"
++		}
++		return result, "available"
++	}
++
++	var original []json.RawMessage
++	if err := json.Unmarshal(envelope.Messages, &original); err != nil {
++		return nil, "unreadable"
++	}
++	if len(original) == 0 {
++		return nil, "raw_only"
++	}
++	for _, message := range original {
++		var role struct {
++			Role string `json:"role"`
++		}
++		if err := json.Unmarshal(message, &role); err != nil {
++			return nil, "unreadable"
++		}
++		if role.Role != "user" && role.Role != "assistant" {
++			return nil, "raw_only"
++		}
++		messages = append(messages, message)
++	}
++	result, err := json.Marshal(messages)
++	if err != nil {
++		return nil, "unreadable"
++	}
++	return result, "available"
++}
++
+ func auditConversation(c *gin.Context, request dto.Request) (string, string) {
+ 	if value := strings.TrimSpace(c.GetHeader("Session_id")); value != "" {
+ 		return audit.ConversationID(value), "session_id"
+diff --git a/controller/relay_audit_test.go b/controller/relay_audit_test.go
+index b61c2a36..de9c9ae3 100644
+--- a/controller/relay_audit_test.go
++++ b/controller/relay_audit_test.go
+@@ -29,3 +29,26 @@ func TestExtractChatMessagesMarksNonRoleRequestsRawOnly(t *testing.T) {
+ 	require.Nil(t, messages)
+ 	require.Equal(t, "raw_only", status)
+ }
++
++func TestExtractAnthropicMessagesPreservesSystemAndRoleStructure(t *testing.T) {
++	body := []byte(`{"model":"claude-test","system":[{"type":"text","text":"policy","cache_control":{"type":"ephemeral"}}],"messages":[{"role":"user","content":[{"type":"text","text":"question"},{"type":"image","source":{"type":"base64","media_type":"image/png","data":"abc"}}]},{"role":"assistant","content":[{"type":"tool_use","id":"tool-1","name":"lookup","input":{"q":"audit"}}]}]}`)
++	messages, status := extractAnthropicMessages(&dto.ClaudeRequest{}, body)
++
++	require.Equal(t, "available", status)
++	var expected struct {
++		System   json.RawMessage   `json:"system"`
++		Messages []json.RawMessage `json:"messages"`
++	}
++	require.NoError(t, json.Unmarshal(body, &expected))
++	system, err := json.Marshal(map[string]json.RawMessage{"role": json.RawMessage(`"system"`), "content": expected.System})
++	require.NoError(t, err)
++	expectedMessages, err := json.Marshal(append([]json.RawMessage{system}, expected.Messages...))
++	require.NoError(t, err)
++	require.JSONEq(t, string(expectedMessages), string(messages))
++}
++
++func TestExtractAnthropicMessagesDoesNotGuessUnknownRoles(t *testing.T) {
++	messages, status := extractAnthropicMessages(&dto.ClaudeRequest{}, []byte(`{"model":"claude-test","messages":[{"content":"unknown"}]}`))
++	require.Nil(t, messages)
++	require.Equal(t, "raw_only", status)
++}
+-- 
+2.53.0
+
