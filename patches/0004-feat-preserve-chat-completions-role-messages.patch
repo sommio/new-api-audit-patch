@@ -1,0 +1,202 @@
+From 694ffa6c2e99ae79b9057d1f6efea2213c8da93c Mon Sep 17 00:00:00 2001
+From: sommio <sommio.mail@gmail.com>
+Date: Tue, 1 Sep 2026 18:12:06 +0800
+Subject: [PATCH] =?UTF-8?q?feat(audit):=20=E4=BF=9D=E7=95=99=20Chat=20Comp?=
+ =?UTF-8?q?letions=20=E8=A7=92=E8=89=B2=E6=B6=88=E6=81=AF?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+---
+ audit/sender.go                | 38 +++++++++++++++-------------
+ audit/sender_test.go           | 10 ++++++++
+ controller/relay.go            | 46 ++++++++++++++++++++++++++++++++++
+ controller/relay_audit_test.go | 31 +++++++++++++++++++++++
+ 4 files changed, 107 insertions(+), 18 deletions(-)
+ create mode 100644 controller/relay_audit_test.go
+
+diff --git a/audit/sender.go b/audit/sender.go
+index 3a5a5f0f..1dd6f9c9 100644
+--- a/audit/sender.go
++++ b/audit/sender.go
+@@ -22,24 +22,26 @@ const (
+ )
+ 
+ type RequestEvent struct {
+-	RequestId          string `json:"request_id"`
+-	CreatedAt          string `json:"created_at"`
+-	UserId             int    `json:"user_id"`
+-	Username           string `json:"username"`
+-	TokenId            int    `json:"token_id"`
+-	TokenName          string `json:"token_name"`
+-	ModelName          string `json:"model_name"`
+-	RequestPath        string `json:"request_path"`
+-	RelayFormat        string `json:"relay_format"`
+-	IsStream           bool   `json:"is_stream"`
+-	PromptHash         string `json:"prompt_hash"`
+-	PromptPreview      string `json:"prompt_preview"`
+-	PromptText         string `json:"prompt_text"`
+-	PromptLen          int    `json:"prompt_len,omitempty"`
+-	PromptOmitted      bool   `json:"prompt_omitted,omitempty"`
+-	ConversationID     string `json:"conversation_id,omitempty"`
+-	ConversationSource string `json:"conversation_source,omitempty"`
+-	UserDisplayName    string `json:"user_display_name,omitempty"`
++	RequestId          string          `json:"request_id"`
++	CreatedAt          string          `json:"created_at"`
++	UserId             int             `json:"user_id"`
++	Username           string          `json:"username"`
++	TokenId            int             `json:"token_id"`
++	TokenName          string          `json:"token_name"`
++	ModelName          string          `json:"model_name"`
++	RequestPath        string          `json:"request_path"`
++	RelayFormat        string          `json:"relay_format"`
++	IsStream           bool            `json:"is_stream"`
++	PromptHash         string          `json:"prompt_hash"`
++	PromptPreview      string          `json:"prompt_preview"`
++	PromptText         string          `json:"prompt_text"`
++	PromptLen          int             `json:"prompt_len,omitempty"`
++	PromptOmitted      bool            `json:"prompt_omitted,omitempty"`
++	ConversationID     string          `json:"conversation_id,omitempty"`
++	ConversationSource string          `json:"conversation_source,omitempty"`
++	UserDisplayName    string          `json:"user_display_name,omitempty"`
++	Messages           json.RawMessage `json:"messages,omitempty"`
++	MessagesStatus     string          `json:"messages_status"`
+ }
+ 
+ type UsageEvent struct {
+diff --git a/audit/sender_test.go b/audit/sender_test.go
+index a6081a84..762852b8 100644
+--- a/audit/sender_test.go
++++ b/audit/sender_test.go
+@@ -145,3 +145,13 @@ func TestConversationIDIsSecretBoundAndDoesNotExposeSource(t *testing.T) {
+ 	useTestConfig(config{secret: "second-secret"}, make(chan outboundEvent, 1))
+ 	require.NotEqual(t, first, ConversationID("sess-sensitive-value"))
+ }
++
++func TestRequestEventPreservesStructuredMessages(t *testing.T) {
++	messages := json.RawMessage(`[{"role":"developer","content":"constraints"},{"role":"assistant","content":null,"tool_calls":[{"id":"call-1","type":"function","function":{"name":"lookup","arguments":"{}"}}]},{"role":"tool","tool_call_id":"call-1","content":[{"type":"text","text":"result"},{"type":"image_url","image_url":{"url":"https://example.test/image.png"}}]}]`)
++	body, err := json.Marshal(RequestEvent{RequestId: "req-1", Messages: messages, MessagesStatus: "available"})
++	require.NoError(t, err)
++	var payload map[string]json.RawMessage
++	require.NoError(t, json.Unmarshal(body, &payload))
++	require.JSONEq(t, string(messages), string(payload["messages"]))
++	require.JSONEq(t, `"available"`, string(payload["messages_status"]))
++}
+diff --git a/controller/relay.go b/controller/relay.go
+index d3251628..7656505e 100644
+--- a/controller/relay.go
++++ b/controller/relay.go
+@@ -1,6 +1,7 @@
+ package controller
+ 
+ import (
++	"encoding/json"
+ 	"errors"
+ 	"fmt"
+ 	"io"
+@@ -130,6 +131,11 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
+ 	needSensitiveCheck := setting.ShouldCheckPromptSensitive()
+ 	needCountToken := constant.CountToken
+ 	needAuditPrompt := audit.EnabledForToken(c.GetString("token_name"))
++	var structuredMessages json.RawMessage
++	messagesStatus := "raw_only"
++	if needAuditPrompt {
++		structuredMessages, messagesStatus = auditMessages(c, request, relayconstant.Path2RelayMode(c.Request.URL.Path))
++	}
+ 	// Avoid building huge CombineText (strings.Join) when token counting and sensitive check are both disabled.
+ 	var meta *types.TokenCountMeta
+ 	if needSensitiveCheck || needCountToken || needAuditPrompt {
+@@ -158,6 +164,8 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
+ 			ConversationID:     conversationID,
+ 			ConversationSource: conversationSource,
+ 			UserDisplayName:    c.GetString("display_name"),
++			Messages:           structuredMessages,
++			MessagesStatus:     messagesStatus,
+ 		})
+ 	}
+ 
+@@ -280,6 +288,44 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
+ 	}
+ }
+ 
++func auditMessages(c *gin.Context, request dto.Request, relayMode int) (json.RawMessage, string) {
++	if relayMode != relayconstant.RelayModeChatCompletions {
++		return nil, "raw_only"
++	}
++	storage, err := common.GetBodyStorage(c)
++	if err != nil {
++		return nil, "unreadable"
++	}
++	body, err := storage.Bytes()
++	if err != nil {
++		return nil, "unreadable"
++	}
++	return extractChatMessages(request, body)
++}
++
++func extractChatMessages(request dto.Request, body []byte) (json.RawMessage, string) {
++	if _, ok := request.(*dto.GeneralOpenAIRequest); !ok {
++		return nil, "raw_only"
++	}
++	var envelope struct {
++		Messages json.RawMessage `json:"messages"`
++	}
++	if err := json.Unmarshal(body, &envelope); err != nil {
++		return nil, "unreadable"
++	}
++	if len(envelope.Messages) == 0 || string(envelope.Messages) == "null" {
++		return nil, "raw_only"
++	}
++	if !json.Valid(envelope.Messages) {
++		return nil, "unreadable"
++	}
++	var messages []json.RawMessage
++	if err := json.Unmarshal(envelope.Messages, &messages); err != nil || len(messages) == 0 {
++		return nil, "raw_only"
++	}
++	return envelope.Messages, "available"
++}
++
+ func auditConversation(c *gin.Context, request dto.Request) (string, string) {
+ 	if value := strings.TrimSpace(c.GetHeader("Session_id")); value != "" {
+ 		return audit.ConversationID(value), "session_id"
+diff --git a/controller/relay_audit_test.go b/controller/relay_audit_test.go
+new file mode 100644
+index 00000000..b61c2a36
+--- /dev/null
++++ b/controller/relay_audit_test.go
+@@ -0,0 +1,31 @@
++package controller
++
++import (
++	"encoding/json"
++	"testing"
++
++	"github.com/QuantumNous/new-api/relaykit/dto"
++	"github.com/stretchr/testify/require"
++)
++
++func TestExtractChatMessagesPreservesOriginalRoleStructure(t *testing.T) {
++	body := []byte(`{"model":"gpt-test","messages":[{"role":"developer","content":"constraints"},{"role":"assistant","content":null,"tool_calls":[{"id":"call-1","type":"function","function":{"name":"lookup","arguments":"{}"}}]},{"role":"tool","tool_call_id":"call-1","content":[{"type":"text","text":"result"},{"type":"image_url","image_url":{"url":"https://example.test/image.png"}}]}]}`)
++	messages, status := extractChatMessages(&dto.GeneralOpenAIRequest{}, body)
++
++	require.Equal(t, "available", status)
++	var expected struct {
++		Messages json.RawMessage `json:"messages"`
++	}
++	require.NoError(t, json.Unmarshal(body, &expected))
++	require.JSONEq(t, string(expected.Messages), string(messages))
++}
++
++func TestExtractChatMessagesMarksNonRoleRequestsRawOnly(t *testing.T) {
++	messages, status := extractChatMessages(&dto.BaseRequest{}, []byte(`{"prompt":"plain completion"}`))
++	require.Nil(t, messages)
++	require.Equal(t, "raw_only", status)
++
++	messages, status = extractChatMessages(&dto.GeneralOpenAIRequest{}, []byte(`{"model":"fim","prefix":"a","suffix":"b"}`))
++	require.Nil(t, messages)
++	require.Equal(t, "raw_only", status)
++}
+-- 
+2.53.0
+

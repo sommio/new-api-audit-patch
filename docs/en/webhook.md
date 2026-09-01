@@ -56,10 +56,14 @@ def verify(secret: bytes, body: bytes, timestamp: str, signature: str) -> bool:
 | `prompt_omitted` | bool | `true` when the full prompt was omitted |
 | `conversation_id` | string | HMAC-derived 64-char hex conversation identifier; omitted when no conversation source exists |
 | `conversation_source` | string | `session_id` or `prompt_cache_key`; omitted when no source exists |
+| `messages` | JSON array | Original ordered Chat Completions `messages` array, including roles, content blocks, tool calls, and preserved unknown message fields; omitted unless `messages_status` is `available` |
+| `messages_status` | string | `available` for extractable Chat Completions messages, `raw_only` for endpoints without role messages, or `unreadable` when the gateway cannot re-read the validated request body |
 
 `conversation_id` derivation: `hex(hmac_sha256("new-api-audit/conversation\0" + raw, AUDIT_SECRET))`. The raw `Session_id` request header / `prompt_cache_key` value is never sent. Rotating `AUDIT_SECRET` changes the derived ID for the same conversation.
 
 `conversation_source` priority: request header `Session_id` non-empty → `session_id`; otherwise OpenAI Chat `prompt_cache_key` or OpenAI Responses `prompt_cache_key` (a JSON string) → `prompt_cache_key`; otherwise both fields are omitted.
+
+For Chat Completions, the gateway extracts the native request `messages` array before using `CombineText` or converting protocols. It preserves message order and JSON structure rather than deriving roles from flattened text. Endpoints without a verifiable role-message model send `messages_status=raw_only`; they do not infer a user turn from a Prompt.
 
 ## Usage Event Fields
 
@@ -92,6 +96,6 @@ The usage event is emitted when billing is recorded (`RecordConsumeLog`) and is 
 
 ## Privacy and Security
 
-- Full prompts travel in plaintext; production must use HTTPS.
+- Full prompts and structured messages travel in plaintext; production must use HTTPS.
 - Raw conversation identifiers (`Session_id` header, `prompt_cache_key`) are never sent — only the HMAC-derived value.
 - Treat `AUDIT_SECRET` as a credential: after rotation, verification of old events fails and `conversation_id` values change.
