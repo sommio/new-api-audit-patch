@@ -22,9 +22,6 @@ jobs:
       release_ref: ${{ steps.release.outputs.ref }}
       release_sha: ${{ steps.release.outputs.sha }}
       release_short_sha: ${{ steps.release.outputs.short_sha }}
-      main_ref: ${{ steps.main.outputs.ref }}
-      main_sha: ${{ steps.main.outputs.sha }}
-      main_short_sha: ${{ steps.main.outputs.short_sha }}
     steps:
       - name: Resolve release revision
         id: release
@@ -38,35 +35,16 @@ jobs:
           echo "sha=$sha" >> "$GITHUB_OUTPUT"
           echo "short_sha=${sha:0:7}" >> "$GITHUB_OUTPUT"
 
-      - name: Resolve main revision
-        id: main
-        run: |
-          sha=$(git ls-remote https://github.com/QuantumNous/new-api.git refs/heads/main | cut -f1)
-          test -n "$sha"
-          echo "ref=main" >> "$GITHUB_OUTPUT"
-          echo "sha=$sha" >> "$GITHUB_OUTPUT"
-          echo "short_sha=${sha:0:7}" >> "$GITHUB_OUTPUT"
-
   build:
     needs: prepare
     strategy:
       fail-fast: false
       matrix:
         include:
-          - track: release
-            arch: amd64
+          - arch: amd64
             platform: linux/amd64
             runner: ubuntu-latest
-          - track: release
-            arch: arm64
-            platform: linux/arm64
-            runner: ubuntu-24.04-arm
-          - track: main
-            arch: amd64
-            platform: linux/amd64
-            runner: ubuntu-latest
-          - track: main
-            arch: arm64
+          - arch: arm64
             platform: linux/arm64
             runner: ubuntu-24.04-arm
     runs-on: ${{ matrix.runner }}
@@ -75,18 +53,9 @@ jobs:
       - name: Select upstream revision
         id: upstream
         run: |
-          if [ "${{ matrix.track }}" = release ]; then
-            ref='${{ needs.prepare.outputs.release_ref }}'
-            sha='${{ needs.prepare.outputs.release_sha }}'
-            short_sha='${{ needs.prepare.outputs.release_short_sha }}'
-          else
-            ref='${{ needs.prepare.outputs.main_ref }}'
-            sha='${{ needs.prepare.outputs.main_sha }}'
-            short_sha='${{ needs.prepare.outputs.main_short_sha }}'
-          fi
-          echo "ref=$ref" >> "$GITHUB_OUTPUT"
-          echo "sha=$sha" >> "$GITHUB_OUTPUT"
-          echo "short_sha=$short_sha" >> "$GITHUB_OUTPUT"
+          echo "ref=${{ needs.prepare.outputs.release_ref }}" >> "$GITHUB_OUTPUT"
+          echo "sha=${{ needs.prepare.outputs.release_sha }}" >> "$GITHUB_OUTPUT"
+          echo "short_sha=${{ needs.prepare.outputs.release_short_sha }}" >> "$GITHUB_OUTPUT"
 
       - name: Check out upstream
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -158,8 +127,8 @@ jobs:
             ghcr.io/sommio/new-api-audit-patch:${{ steps.upstream.outputs.short_sha }}-${{ matrix.arch }}
           provenance: mode=max
           sbom: true
-          cache-from: type=gha,scope=${{ matrix.track }}-${{ matrix.arch }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.track }}-${{ matrix.arch }}
+          cache-from: type=gha,scope=release-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=release-${{ matrix.arch }}
 
       - name: Attest image provenance
         uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3.0.0
@@ -170,22 +139,13 @@ jobs:
 
   manifest:
     needs: [prepare, build]
-    strategy:
-      fail-fast: false
-      matrix:
-        track: [release, main]
     runs-on: ubuntu-latest
     steps:
       - name: Select upstream revision
         id: upstream
         run: |
-          if [ "${{ matrix.track }}" = release ]; then
-            echo "ref=${{ needs.prepare.outputs.release_ref }}" >> "$GITHUB_OUTPUT"
-            echo "short_sha=${{ needs.prepare.outputs.release_short_sha }}" >> "$GITHUB_OUTPUT"
-          else
-            echo "ref=${{ needs.prepare.outputs.main_ref }}" >> "$GITHUB_OUTPUT"
-            echo "short_sha=${{ needs.prepare.outputs.main_short_sha }}" >> "$GITHUB_OUTPUT"
-          fi
+          echo "ref=${{ needs.prepare.outputs.release_ref }}" >> "$GITHUB_OUTPUT"
+          echo "short_sha=${{ needs.prepare.outputs.release_short_sha }}" >> "$GITHUB_OUTPUT"
 
       - name: Log in to GHCR
         uses: docker/login-action@c99871dec2022cc055c062a10cc1a1310835ceb4 # v4.3.0
@@ -199,10 +159,7 @@ jobs:
           IMAGE: ghcr.io/sommio/new-api-audit-patch
           REF: ${{ steps.upstream.outputs.ref }}
           SHORT_SHA: ${{ steps.upstream.outputs.short_sha }}
-          TRACK: ${{ matrix.track }}
         run: |
           docker buildx imagetools create -t "$IMAGE:$REF" "$IMAGE:$REF-amd64" "$IMAGE:$REF-arm64"
           docker buildx imagetools create -t "$IMAGE:$SHORT_SHA" "$IMAGE:$SHORT_SHA-amd64" "$IMAGE:$SHORT_SHA-arm64"
-          if [ "$TRACK" = release ]; then
-            docker buildx imagetools create -t "$IMAGE:latest" "$IMAGE:$REF-amd64" "$IMAGE:$REF-arm64"
-          fi
+          docker buildx imagetools create -t "$IMAGE:latest" "$IMAGE:$REF-amd64" "$IMAGE:$REF-arm64"

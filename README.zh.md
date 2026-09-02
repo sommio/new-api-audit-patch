@@ -8,10 +8,9 @@
 
 - `v*` 镜像上游正式 release，如 `v1.0.0-rc.25`。
 - `latest` 指向最新的上游正式 release。
-- `main` 指向上游 `main` 分支的最新成功构建。
-- 7 位上游提交 SHA，如 `09422fe`，指向该特定 patched 上游修订。
+- 7 位上游提交 SHA，如 `09422fe`，指向该特定 patched 正式 release 修订。
 
-请按 digest 部署，不要追 `latest` 或 `main` 移动标签。补丁队列变更时，版本号与短 SHA 标签也可能被重发。
+请按 digest 部署，不要追 `latest` 移动标签。补丁队列变更时，版本号与短 SHA 标签也可能被重发。
 
 ## 文档
 

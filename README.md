@@ -11,12 +11,11 @@ Published tags:
 
 - `v*` mirrors an upstream formal release, such as `v1.0.0-rc.25`.
 - `latest` points to the newest upstream formal release.
-- `main` points to the latest successful build of upstream `main`.
 - A seven-character upstream commit SHA, such as `09422fe`, points to that
-  specific patched upstream revision.
+  specific patched formal release revision.
 
-Deploy by digest, not a moving `latest` or `main` tag. Version and short-SHA
-tags may also be republished if this patch queue changes.
+Deploy by digest, not the moving `latest` tag. Version and short-SHA tags may
+also be republished if this patch queue changes.
 
 ## Documentation
 

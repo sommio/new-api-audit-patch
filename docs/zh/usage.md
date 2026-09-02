@@ -13,9 +13,8 @@ ghcr.io/sommio/new-api-audit-patch
 | 标签 | 指向 | 说明 |
 | --- | --- | --- |
 | `latest` | 上游最新正式 release | 移动标签，随上游发版更新 |
-| `main` | 上游 main 分支最新成功构建 | 移动标签 |
 | `v*` | 上游正式 release，如 `v1.0.0-rc.25` | 版本号固定；补丁队列更新时可能被重发 |
-| 7 位短 SHA（如 `09422fe`） | 对应上游提交的 patched 构建 | 固定；补丁队列更新时可能被重发 |
+| 7 位短 SHA（如 `09422fe`） | 对应上游正式 release 提交的 patched 构建 | 固定；补丁队列更新时可能被重发 |
 
 - 多架构：`linux/amd64` + `linux/arm64`。
 - 生产建议按 digest 部署（`docker buildx imagetools inspect ghcr.io/sommio/new-api-audit-patch:<tag>` 查 digest），不要追移动标签。

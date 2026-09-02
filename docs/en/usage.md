@@ -13,9 +13,8 @@ ghcr.io/sommio/new-api-audit-patch
 | Tag | Points to | Notes |
 | --- | --- | --- |
 | `latest` | Newest upstream formal release | Moving; updated when upstream releases |
-| `main` | Latest successful build of upstream `main` | Moving |
 | `v*` | Upstream formal release, e.g. `v1.0.0-rc.25` | Version is fixed; may be republished when the patch queue changes |
-| 7-char short SHA (e.g. `09422fe`) | Patched build of that upstream commit | Fixed; may be republished when the patch queue changes |
+| 7-char short SHA (e.g. `09422fe`) | Patched build of that upstream formal release commit | Fixed; may be republished when the patch queue changes |
 
 - Multi-architecture: `linux/amd64` + `linux/arm64`.
 - For production, deploy by digest (`docker buildx imagetools inspect ghcr.io/sommio/new-api-audit-patch:<tag>` to resolve it), not by a moving tag.
