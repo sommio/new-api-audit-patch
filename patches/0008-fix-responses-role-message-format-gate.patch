@@ -1,0 +1,95 @@
+From b9f3c06347b2260fa1809958130d3bc800b1be6c Mon Sep 17 00:00:00 2001
+From: sommio <sommio.mail@gmail.com>
+Date: Wed, 2 Sep 2026 11:04:50 +0800
+Subject: [PATCH] =?UTF-8?q?fix(audit):=20=E4=BF=AE=E5=A4=8D=20Responses=20?=
+ =?UTF-8?q?=E8=A7=92=E8=89=B2=E6=B6=88=E6=81=AF=E6=A0=BC=E5=BC=8F=E9=97=A8?=
+ =?UTF-8?q?=E7=A6=81?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+---
+ controller/relay.go            |  6 ++++--
+ controller/relay_audit_test.go | 35 ++++++++++++++++++++++++++++++++++
+ 2 files changed, 39 insertions(+), 2 deletions(-)
+
+diff --git a/controller/relay.go b/controller/relay.go
+index 0baa834b..c6b0a988 100644
+--- a/controller/relay.go
++++ b/controller/relay.go
+@@ -291,7 +291,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
+ func auditMessages(c *gin.Context, request dto.Request, relayFormat types.RelayFormat, relayMode int) (json.RawMessage, string) {
+ 	switch relayFormat {
+ 	case types.RelayFormatClaude:
+-	case types.RelayFormatOpenAI, types.RelayFormatGemini:
++	case types.RelayFormatOpenAI, types.RelayFormatOpenAIResponses, types.RelayFormatOpenAIResponsesCompaction, types.RelayFormatGemini:
+ 	default:
+ 		return nil, "raw_only"
+ 	}
+@@ -348,7 +348,9 @@ func extractChatMessages(request dto.Request, body []byte) (json.RawMessage, str
+ }
+ 
+ func extractResponsesMessages(request dto.Request, body []byte) (json.RawMessage, string) {
+-	if _, ok := request.(*dto.OpenAIResponsesRequest); !ok {
++	switch request.(type) {
++	case *dto.OpenAIResponsesRequest, *dto.OpenAIResponsesCompactionRequest:
++	default:
+ 		return nil, "raw_only"
+ 	}
+ 	var envelope struct {
+diff --git a/controller/relay_audit_test.go b/controller/relay_audit_test.go
+index 318d2330..b0a52e4f 100644
+--- a/controller/relay_audit_test.go
++++ b/controller/relay_audit_test.go
+@@ -2,9 +2,16 @@ package controller
+ 
+ import (
+ 	"encoding/json"
++	"net/http"
++	"net/http/httptest"
++	"strings"
+ 	"testing"
+ 
++	"github.com/QuantumNous/new-api/common"
++	"github.com/QuantumNous/new-api/relay/constant"
+ 	"github.com/QuantumNous/new-api/relaykit/dto"
++	"github.com/QuantumNous/new-api/relaykit/types"
++	"github.com/gin-gonic/gin"
+ 	"github.com/stretchr/testify/require"
+ )
+ 
+@@ -101,3 +108,31 @@ func TestExtractGeminiMessagesMarksUnassignedOrNonConversationRequestsRawOnly(t
+ 	require.Nil(t, messages)
+ 	require.Equal(t, "raw_only", status)
+ }
++
++func TestAuditMessagesPreservesSupportedProtocolMatrix(t *testing.T) {
++	for _, test := range []struct {
++		name        string
++		request     dto.Request
++		relayFormat types.RelayFormat
++		relayMode   int
++		body        string
++	}{
++		{"chat_completions", &dto.GeneralOpenAIRequest{}, types.RelayFormatOpenAI, constant.RelayModeChatCompletions, `{"messages":[{"role":"user","content":"question"}]}`},
++		{"responses", &dto.OpenAIResponsesRequest{}, types.RelayFormatOpenAIResponses, constant.RelayModeResponses, `{"input":[{"role":"developer","content":"constraints"},{"role":"user","content":"question"}]}`},
++		{"responses_compaction", &dto.OpenAIResponsesCompactionRequest{}, types.RelayFormatOpenAIResponsesCompaction, constant.RelayModeResponsesCompact, `{"input":[{"role":"developer","content":"constraints"},{"role":"user","content":"question"}]}`},
++		{"anthropic", &dto.ClaudeRequest{}, types.RelayFormatClaude, constant.RelayModeUnknown, `{"messages":[{"role":"user","content":"question"}]}`},
++		{"gemini", &dto.GeminiChatRequest{}, types.RelayFormatGemini, constant.RelayModeGemini, `{"contents":[{"role":"user","parts":[{"text":"question"}]}]}`},
++	} {
++		t.Run(test.name, func(t *testing.T) {
++			recorder := httptest.NewRecorder()
++			context, _ := gin.CreateTestContext(recorder)
++			context.Request = httptest.NewRequest(http.MethodPost, "/", strings.NewReader(test.body))
++			defer common.CleanupBodyStorage(context)
++
++			messages, status := auditMessages(context, test.request, test.relayFormat, test.relayMode)
++
++			require.Equal(t, "available", status)
++			require.NotEmpty(t, messages)
++		})
++	}
++}
+-- 
+2.53.0
+

@@ -56,7 +56,7 @@ services:
 - At-most-once: full queue, HTTP errors (including ≥400), and timeouts drop the event with a log line — no retry, no persistence. Receivers must tolerate missing events and upsert idempotently by `request_id`.
 - Oversize compaction: a request event exceeding `AUDIT_MAX_EVENT_BYTES` is sent without `prompt_text` (`prompt_omitted=true`, plus `prompt_len`, `prompt_hash`, `prompt_preview`); if still too large, it is dropped. Usage events are dropped outright when oversize.
 - Exclusion: tokens matching `AUDIT_EXCLUDED_TOKEN_NAMES` emit neither request nor usage events.
-- Role-preserved request evidence covers Chat Completions, Responses, Anthropic Messages, and Gemini GenerateContent. Endpoints without explicit role messages remain `raw_only`; see the [webhook contract](webhook.md).
+- Role-preserved request evidence covers Chat Completions, Responses (including `/v1/responses/compact`), Anthropic Messages, and Gemini GenerateContent. Endpoints without explicit role messages remain `raw_only`; see the [webhook contract](webhook.md).
 - Events without a `request_id` are dropped.
 
 ## Building from Source

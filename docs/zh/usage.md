@@ -56,7 +56,7 @@ services:
 - at-most-once：队列满、HTTP 错误（含 ≥400）、超时均丢弃事件，只记日志，不重试、不落盘。接收端必须容忍事件缺失，并按 `request_id` 幂等 upsert。
 - 超限压缩：request 事件超过 `AUDIT_MAX_EVENT_BYTES` 时去掉 `prompt_text`（置 `prompt_omitted=true`，附 `prompt_len`、`prompt_hash`、`prompt_preview`）后发送；压缩后仍超限则丢弃。usage 事件超限直接丢弃。
 - 排除：命中 `AUDIT_EXCLUDED_TOKEN_NAMES` 的 token 不发 request 也不发 usage 事件。
-- 角色保留的请求证据覆盖 Chat Completions、Responses、Anthropic Messages 和 Gemini GenerateContent。没有明确角色消息的端点保持 `raw_only`；详见 [webhook 契约](webhook.md)。
+- 角色保留的请求证据覆盖 Chat Completions、Responses（包括 `/v1/responses/compact`）、Anthropic Messages 和 Gemini GenerateContent。没有明确角色消息的端点保持 `raw_only`；详见 [webhook 契约](webhook.md)。
 - 无 `request_id` 的事件直接丢弃。
 
 ## 源码方式使用
