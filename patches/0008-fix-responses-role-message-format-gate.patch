@@ -1,23 +1,19 @@
-From b9f3c06347b2260fa1809958130d3bc800b1be6c Mon Sep 17 00:00:00 2001
+From c7f6d6896007bafef74fa5382a047a79a73ece48 Mon Sep 17 00:00:00 2001
 From: sommio <sommio.mail@gmail.com>
 Date: Wed, 2 Sep 2026 11:04:50 +0800
-Subject: [PATCH] =?UTF-8?q?fix(audit):=20=E4=BF=AE=E5=A4=8D=20Responses=20?=
- =?UTF-8?q?=E8=A7=92=E8=89=B2=E6=B6=88=E6=81=AF=E6=A0=BC=E5=BC=8F=E9=97=A8?=
- =?UTF-8?q?=E7=A6=81?=
+Subject: [PATCH 8/8] =?UTF-8?q?fix(audit):=20=E4=BF=AE=E5=A4=8D=20Response?=
+ =?UTF-8?q?s=20=E8=A7=92=E8=89=B2=E6=B6=88=E6=81=AF=E6=A0=BC=E5=BC=8F?=
+ =?UTF-8?q?=E9=97=A8=E7=A6=81?=
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit
 
----
- controller/relay.go            |  6 ++++--
- controller/relay_audit_test.go | 35 ++++++++++++++++++++++++++++++++++
- 2 files changed, 39 insertions(+), 2 deletions(-)
 
 diff --git a/controller/relay.go b/controller/relay.go
-index 0baa834b..c6b0a988 100644
+index 21a6588d..119afe33 100644
 --- a/controller/relay.go
 +++ b/controller/relay.go
-@@ -291,7 +291,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
+@@ -325,7 +325,7 @@ func CountClaudeTokens(c *gin.Context) {
  func auditMessages(c *gin.Context, request dto.Request, relayFormat types.RelayFormat, relayMode int) (json.RawMessage, string) {
  	switch relayFormat {
  	case types.RelayFormatClaude:
@@ -26,7 +22,7 @@ index 0baa834b..c6b0a988 100644
  	default:
  		return nil, "raw_only"
  	}
-@@ -348,7 +348,9 @@ func extractChatMessages(request dto.Request, body []byte) (json.RawMessage, str
+@@ -382,7 +382,9 @@ func extractChatMessages(request dto.Request, body []byte) (json.RawMessage, str
  }
  
  func extractResponsesMessages(request dto.Request, body []byte) (json.RawMessage, string) {

@@ -1,0 +1,48 @@
+name: Verify patch queue
+
+on:
+  pull_request:
+    paths:
+      - 'UPSTREAM_BASE'
+      - 'patches/**'
+      - 'scripts/verify-patch-queue.sh'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [base, latest-release]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out patch queue
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Resolve upstream revision
+        id: upstream
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ '${{ matrix.target }}' = base ]; then
+            sha=$(cat UPSTREAM_BASE)
+          else
+            tag=$(gh api repos/QuantumNous/new-api/releases/latest --jq .tag_name)
+            sha=$(git ls-remote https://github.com/QuantumNous/new-api.git "refs/tags/$tag^{}" "refs/tags/$tag" | head -1 | cut -f1)
+          fi
+          test -n "$sha"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
+      - name: Check out upstream
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          repository: QuantumNous/new-api
+          ref: ${{ steps.upstream.outputs.sha }}
+          path: upstream
+          fetch-depth: 0
+
+      - name: Apply and verify patches
+        run: scripts/verify-patch-queue.sh upstream patches

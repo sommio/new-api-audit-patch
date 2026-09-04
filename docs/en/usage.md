@@ -61,13 +61,15 @@ services:
 
 ## Building from Source
 
-The patch queue is based on upstream commit `2d8e50bf` (see `UPSTREAM_BASE`); apply in order:
+The patch queue is based on upstream commit `36dbbf0f` (see `UPSTREAM_BASE`); apply in order:
 
 ```bash
 git clone https://github.com/QuantumNous/new-api.git upstream
-cd upstream && git checkout 2d8e50bf
+cd upstream && git checkout 36dbbf0f
 git am --3way /path/to/patches/*.patch
 ```
+
+Patch files are generated with `git format-patch`; do not edit their diff or `index` lines manually. Pull requests verify application and index blobs against both `UPSTREAM_BASE` and the latest upstream formal release.
 
 Verify:
 

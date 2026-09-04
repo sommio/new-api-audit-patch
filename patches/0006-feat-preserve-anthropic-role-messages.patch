@@ -1,22 +1,18 @@
-From a5bc26e35a0208841f78bb577575b78e0bba8322 Mon Sep 17 00:00:00 2001
+From 32a4b698cc7931785b0d61b0af8fa10c1f334d86 Mon Sep 17 00:00:00 2001
 From: sommio <sommio.mail@gmail.com>
 Date: Tue, 1 Sep 2026 18:31:12 +0800
-Subject: [PATCH] =?UTF-8?q?feat(audit):=20=E4=BF=9D=E7=95=99=20Anthropic?=
- =?UTF-8?q?=20=E8=A7=92=E8=89=B2=E6=B6=88=E6=81=AF?=
+Subject: [PATCH 6/8] =?UTF-8?q?feat(audit):=20=E4=BF=9D=E7=95=99=20Anthrop?=
+ =?UTF-8?q?ic=20=E8=A7=92=E8=89=B2=E6=B6=88=E6=81=AF?=
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit
 
----
- controller/relay.go            | 73 +++++++++++++++++++++++++++++++++-
- controller/relay_audit_test.go | 23 +++++++++++
- 2 files changed, 94 insertions(+), 2 deletions(-)
 
 diff --git a/controller/relay.go b/controller/relay.go
-index a15616d1..3222d77c 100644
+index 9d2845a3..0cced795 100644
 --- a/controller/relay.go
 +++ b/controller/relay.go
-@@ -134,7 +134,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
+@@ -136,7 +136,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
  	var structuredMessages json.RawMessage
  	messagesStatus := "raw_only"
  	if needAuditPrompt {
@@ -25,8 +21,8 @@ index a15616d1..3222d77c 100644
  	}
  	// Avoid building huge CombineText (strings.Join) when token counting and sensitive check are both disabled.
  	var meta *types.TokenCountMeta
-@@ -288,7 +288,13 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
- 	}
+@@ -322,7 +322,13 @@ func CountClaudeTokens(c *gin.Context) {
+ 	c.JSON(http.StatusOK, gin.H{"input_tokens": inputTokens})
  }
  
 -func auditMessages(c *gin.Context, request dto.Request, relayMode int) (json.RawMessage, string) {
@@ -40,7 +36,7 @@ index a15616d1..3222d77c 100644
  	storage, err := common.GetBodyStorage(c)
  	if err != nil {
  		return nil, "unreadable"
-@@ -297,6 +303,9 @@ func auditMessages(c *gin.Context, request dto.Request, relayMode int) (json.Raw
+@@ -331,6 +337,9 @@ func auditMessages(c *gin.Context, request dto.Request, relayMode int) (json.Raw
  	if err != nil {
  		return nil, "unreadable"
  	}
@@ -50,7 +46,7 @@ index a15616d1..3222d77c 100644
  	switch relayMode {
  	case relayconstant.RelayModeChatCompletions:
  		return extractChatMessages(request, body)
-@@ -357,6 +366,66 @@ func extractResponsesMessages(request dto.Request, body []byte) (json.RawMessage
+@@ -391,6 +400,66 @@ func extractResponsesMessages(request dto.Request, body []byte) (json.RawMessage
  	return nil, "raw_only"
  }
  

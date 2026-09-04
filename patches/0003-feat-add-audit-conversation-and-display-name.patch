@@ -1,18 +1,11 @@
-From 7e5cfe5e14271266ef403f26d085b1e235eb07e7 Mon Sep 17 00:00:00 2001
+From b2ca1ee41c2219d95294c1bcc36919c3bb43c851 Mon Sep 17 00:00:00 2001
 From: Audit Patch Bot <audit-patch@example.invalid>
 Date: Wed, 26 Aug 2026 16:17:38 +0800
-Subject: [PATCH] feat: add audit conversation and display name
+Subject: [PATCH 3/8] feat: add audit conversation and display name
 
----
- audit/sender.go      | 48 +++++++++++++++++++++++++++++-------------
- audit/sender_test.go | 12 +++++++++++
- controller/relay.go  | 50 ++++++++++++++++++++++++++++++++------------
- model/user.go        |  1 +
- model/user_cache.go  |  4 +++-
- 5 files changed, 86 insertions(+), 29 deletions(-)
 
 diff --git a/audit/sender.go b/audit/sender.go
-index 58954973..532c14f5 100644
+index 33104268..3a5a5f0f 100644
 --- a/audit/sender.go
 +++ b/audit/sender.go
 @@ -22,21 +22,24 @@ const (
@@ -105,10 +98,10 @@ index 68c77bc4..a6081a84 100644
 +	require.NotEqual(t, first, ConversationID("sess-sensitive-value"))
 +}
 diff --git a/controller/relay.go b/controller/relay.go
-index bba5a469..d3251628 100644
+index 47caf518..c0785766 100644
 --- a/controller/relay.go
 +++ b/controller/relay.go
-@@ -140,20 +140,24 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
+@@ -142,20 +142,24 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
  
  	if needAuditPrompt && meta != nil {
  		promptText := meta.CombineText
@@ -146,8 +139,8 @@ index bba5a469..d3251628 100644
  		})
  	}
  
-@@ -276,6 +280,26 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
- 	}
+@@ -310,6 +314,26 @@ func CountClaudeTokens(c *gin.Context) {
+ 	c.JSON(http.StatusOK, gin.H{"input_tokens": inputTokens})
  }
  
 +func auditConversation(c *gin.Context, request dto.Request) (string, string) {
@@ -174,7 +167,7 @@ index bba5a469..d3251628 100644
  	Subprotocols: []string{"realtime"}, // WS 握手支持的协议，如果有使用 Sec-WebSocket-Protocol，则必须在此声明对应的 Protocol TODO add other protocol
  	CheckOrigin: func(r *http.Request) bool {
 diff --git a/model/user.go b/model/user.go
-index 7bc060ad..2ee1f9cb 100644
+index 1fbaa34c..426c42b6 100644
 --- a/model/user.go
 +++ b/model/user.go
 @@ -120,6 +120,7 @@ func (user *User) ToBaseUser() *UserBase {

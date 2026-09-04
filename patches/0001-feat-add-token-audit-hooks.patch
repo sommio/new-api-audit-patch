@@ -1,14 +1,8 @@
-From eff4805e178ba54881f32d65820287b0f212ab7c Mon Sep 17 00:00:00 2001
+From ac4ef1a3120b3e4ad0614c3b7c599743aced4829 Mon Sep 17 00:00:00 2001
 From: ck_235 <ck_235@sina.com>
 Date: Tue, 2 Jun 2026 22:42:43 +0800
-Subject: [PATCH] feat: add token audit hooks
+Subject: [PATCH 1/8] feat: add token audit hooks
 
----
- audit/sender.go     | 224 ++++++++++++++++++++++++++++++++++++++++++++
- controller/relay.go |  23 ++++-
- model/log.go        |  23 +++++
- 3 files changed, 269 insertions(+), 1 deletion(-)
- create mode 100644 audit/sender.go
 
 diff --git a/audit/sender.go b/audit/sender.go
 new file mode 100644
@@ -241,7 +235,7 @@ index 00000000..7fc949f0
 +	return result
 +}
 diff --git a/controller/relay.go b/controller/relay.go
-index 8dccfe76..bba5a469 100644
+index 9da14e33..47caf518 100644
 --- a/controller/relay.go
 +++ b/controller/relay.go
 @@ -9,6 +9,7 @@ import (
@@ -252,7 +246,7 @@ index 8dccfe76..bba5a469 100644
  	"github.com/QuantumNous/new-api/common"
  	"github.com/QuantumNous/new-api/constant"
  	taskdto "github.com/QuantumNous/new-api/dto"
-@@ -128,14 +129,34 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
+@@ -130,14 +131,34 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
  
  	needSensitiveCheck := setting.ShouldCheckPromptSensitive()
  	needCountToken := constant.CountToken
@@ -289,7 +283,7 @@ index 8dccfe76..bba5a469 100644
  		contains, words := service.CheckSensitiveText(meta.CombineText)
  		if contains {
 diff --git a/model/log.go b/model/log.go
-index 1d2b38fc..b5fca1e0 100644
+index a0407d53..4e4147e6 100644
 --- a/model/log.go
 +++ b/model/log.go
 @@ -7,6 +7,7 @@ import (
@@ -300,7 +294,7 @@ index 1d2b38fc..b5fca1e0 100644
  	"github.com/QuantumNous/new-api/common"
  	"github.com/QuantumNous/new-api/logger"
  	"github.com/QuantumNous/new-api/types"
-@@ -342,6 +343,7 @@ type RecordConsumeLogParams struct {
+@@ -338,6 +339,7 @@ type RecordConsumeLogParams struct {
  
  func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams) {
  	if !common.LogConsumeEnabled {
@@ -308,7 +302,7 @@ index 1d2b38fc..b5fca1e0 100644
  		return
  	}
  	logger.LogInfo(c, fmt.Sprintf("record consume log: userId=%d, params=%s", userId, common.GetJsonString(params)))
-@@ -387,6 +389,7 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
+@@ -383,6 +385,7 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
  	if err != nil {
  		logger.LogError(c, "failed to record log: "+err.Error())
  	}
@@ -316,7 +310,7 @@ index 1d2b38fc..b5fca1e0 100644
  	if common.DataExportEnabled {
  		LogQuotaData(QuotaDataLogParams{
  			UserID:    userId,
-@@ -403,6 +406,26 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
+@@ -399,6 +402,26 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
  	}
  }
  

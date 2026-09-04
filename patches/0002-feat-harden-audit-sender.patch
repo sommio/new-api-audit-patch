@@ -1,16 +1,11 @@
-From 68bc884214e71b1ad67416d52e7b13b3b30b2de9 Mon Sep 17 00:00:00 2001
+From 7143bdecba4f691aa6eff9690cc2609948929185 Mon Sep 17 00:00:00 2001
 From: Audit Patch Bot <audit-patch@example.invalid>
 Date: Wed, 26 Aug 2026 16:17:38 +0800
-Subject: [PATCH] feat: harden audit sender
+Subject: [PATCH 2/8] feat: harden audit sender
 
----
- audit/sender.go      |  82 +++++++++++++++++++++-----
- audit/sender_test.go | 135 +++++++++++++++++++++++++++++++++++++++++++
- 2 files changed, 203 insertions(+), 14 deletions(-)
- create mode 100644 audit/sender_test.go
 
 diff --git a/audit/sender.go b/audit/sender.go
-index 7fc949f0..58954973 100644
+index 7fc949f0..33104268 100644
 --- a/audit/sender.go
 +++ b/audit/sender.go
 @@ -13,6 +13,7 @@ import (
@@ -298,3 +293,4 @@ index 00000000..68c77bc4
 +}
 -- 
 2.53.0
+

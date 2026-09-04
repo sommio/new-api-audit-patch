@@ -61,13 +61,15 @@ services:
 
 ## 源码方式使用
 
-补丁队列基于上游提交 `2d8e50bf`（见 `UPSTREAM_BASE`），按序应用：
+补丁队列基于上游提交 `36dbbf0f`（见 `UPSTREAM_BASE`），按序应用：
 
 ```bash
 git clone https://github.com/QuantumNous/new-api.git upstream
-cd upstream && git checkout 2d8e50bf
+cd upstream && git checkout 36dbbf0f
 git am --3way /path/to/patches/*.patch
 ```
+
+补丁文件由 `git format-patch` 生成，不要手工编辑其 diff 或 `index` 行。Pull Request 会同时针对 `UPSTREAM_BASE` 和最新上游正式 Release 验证补丁应用与 index blob。
 
 验证：
 

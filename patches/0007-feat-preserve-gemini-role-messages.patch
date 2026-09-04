@@ -1,22 +1,18 @@
-From 870facf1b558374c9d8822b6af5a03c42b2f40ba Mon Sep 17 00:00:00 2001
+From 883a621ff4b62b20b94ce1168efb95620943d6db Mon Sep 17 00:00:00 2001
 From: sommio <sommio.mail@gmail.com>
 Date: Tue, 1 Sep 2026 18:37:54 +0800
-Subject: [PATCH] =?UTF-8?q?feat(audit):=20=E4=BF=9D=E7=95=99=20Gemini=20?=
- =?UTF-8?q?=E8=A7=92=E8=89=B2=E6=B6=88=E6=81=AF?=
+Subject: [PATCH 7/8] =?UTF-8?q?feat(audit):=20=E4=BF=9D=E7=95=99=20Gemini?=
+ =?UTF-8?q?=20=E8=A7=92=E8=89=B2=E6=B6=88=E6=81=AF?=
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit
 
----
- controller/relay.go            | 71 +++++++++++++++++++++++++++++++++-
- controller/relay_audit_test.go | 27 +++++++++++++
- 2 files changed, 97 insertions(+), 1 deletion(-)
 
 diff --git a/controller/relay.go b/controller/relay.go
-index 3222d77c..0baa834b 100644
+index 0cced795..21a6588d 100644
 --- a/controller/relay.go
 +++ b/controller/relay.go
-@@ -291,10 +291,15 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
+@@ -325,10 +325,15 @@ func CountClaudeTokens(c *gin.Context) {
  func auditMessages(c *gin.Context, request dto.Request, relayFormat types.RelayFormat, relayMode int) (json.RawMessage, string) {
  	switch relayFormat {
  	case types.RelayFormatClaude:
@@ -33,7 +29,7 @@ index 3222d77c..0baa834b 100644
  	storage, err := common.GetBodyStorage(c)
  	if err != nil {
  		return nil, "unreadable"
-@@ -306,6 +311,9 @@ func auditMessages(c *gin.Context, request dto.Request, relayFormat types.RelayF
+@@ -340,6 +345,9 @@ func auditMessages(c *gin.Context, request dto.Request, relayFormat types.RelayF
  	if relayFormat == types.RelayFormatClaude {
  		return extractAnthropicMessages(request, body)
  	}
@@ -43,7 +39,7 @@ index 3222d77c..0baa834b 100644
  	switch relayMode {
  	case relayconstant.RelayModeChatCompletions:
  		return extractChatMessages(request, body)
-@@ -426,6 +434,67 @@ func extractAnthropicMessages(request dto.Request, body []byte) (json.RawMessage
+@@ -460,6 +468,67 @@ func extractAnthropicMessages(request dto.Request, body []byte) (json.RawMessage
  	return result, "available"
  }
  
