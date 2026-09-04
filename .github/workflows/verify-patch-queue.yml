@@ -45,4 +45,7 @@ jobs:
           fetch-depth: 0
 
       - name: Apply and verify patches
-        run: scripts/verify-patch-queue.sh upstream patches
+        run: |
+          git -C upstream config user.name 'new-api-audit-patch[bot]'
+          git -C upstream config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          scripts/verify-patch-queue.sh upstream patches
