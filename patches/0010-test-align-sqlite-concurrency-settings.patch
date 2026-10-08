@@ -1,0 +1,93 @@
+From 0645ea221300443eb22b4a4781d8779681865835 Mon Sep 17 00:00:00 2001
+From: sommio <sommio.mail@gmail.com>
+Date: Thu, 8 Oct 2026 11:30:03 +0800
+Subject: [PATCH] =?UTF-8?q?test(sqlite):=20=E4=BF=AE=E5=A4=8D=E5=AE=89?=
+ =?UTF-8?q?=E5=85=A8=E6=B5=8B=E8=AF=95=E7=9A=84=E5=B9=B6=E5=8F=91=E9=94=81?=
+ =?UTF-8?q?=E9=85=8D=E7=BD=AE?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+---
+ controller/security_enrollment_test.go | 47 ++++++++++++++++++++++++--
+ 1 file changed, 45 insertions(+), 2 deletions(-)
+
+diff --git a/controller/security_enrollment_test.go b/controller/security_enrollment_test.go
+index 7cbc56fa468841676270a5e48acb627f28728a13..ba0a7f74a7ed55bbc362bf30c640e9c3ed22641f 100644
+--- a/controller/security_enrollment_test.go
++++ b/controller/security_enrollment_test.go
+@@ -17,6 +17,7 @@ import (
+ 	"fmt"
+ 	"net/http"
+ 	"net/http/httptest"
++	"net/url"
+ 	"os"
+ 	"strconv"
+ 	"strings"
+@@ -32,6 +33,7 @@ import (
+ 	"github.com/QuantumNous/new-api/setting/system_setting"
+ 	"github.com/fxamacker/cbor/v2"
+ 	"github.com/gin-gonic/gin"
++	"github.com/glebarez/sqlite"
+ 	"github.com/golang-jwt/jwt/v5"
+ 	"github.com/pquerna/otp/totp"
+ 	"github.com/stretchr/testify/assert"
+@@ -40,6 +42,47 @@ import (
+ 	"gorm.io/gorm/logger"
+ )
+ 
++// SQLite 并发测试必须使用生产的连接级等待和事务锁配置，而不是裸文件 DSN。
++func TestSecuritySQLiteUsesConcurrentWriteSettings(t *testing.T) {
++	db, dsn := newSecurityTestDatabase(t, "sqlite", "")
++	connection, err := db.DB()
++	require.NoError(t, err)
++	t.Cleanup(func() { require.NoError(t, connection.Close()) })
++	_, query, ok := strings.Cut(dsn, "?")
++	require.True(t, ok, "fixture must preserve connection settings when reopened")
++	params, err := url.ParseQuery(query)
++	require.NoError(t, err)
++	assert.Equal(t, "immediate", params.Get("_txlock"))
++	// 同时持有两个连接，防止仅首个连接的 PRAGMA 被设置而误报通过。
++	for range 2 {
++		conn, err := connection.Conn(context.Background())
++		require.NoError(t, err)
++		t.Cleanup(func() { require.NoError(t, conn.Close()) })
++		var timeout int
++		var journal string
++		require.NoError(t, conn.QueryRowContext(context.Background(), "PRAGMA busy_timeout").Scan(&timeout))
++		require.NoError(t, conn.QueryRowContext(context.Background(), "PRAGMA journal_mode").Scan(&journal))
++		assert.Equal(t, 30000, timeout)
++		assert.Equal(t, "wal", journal)
++	}
++}
++
++// 安全验证使用生产 SQLite 锁配置；通用夹具还承载强制交错读快照的专项测试，不能全局替换。
++func newSecurityTestDatabase(t *testing.T, kind, dsn string) (*gorm.DB, string) {
++	t.Helper()
++	if kind != "sqlite" {
++		return newAuditTestDatabase(t, kind, dsn)
++	}
++	// 与 common.SQLitePath 的生产默认一致，保留多连接与并发请求。
++	path := t.TempDir() + "/security.db?_pragma=busy_timeout(30000)&_pragma=journal_mode(WAL)&_txlock=immediate"
++	db, err := gorm.Open(sqlite.Open(path), &gorm.Config{})
++	require.NoError(t, err)
++	connection, err := db.DB()
++	require.NoError(t, err)
++	t.Cleanup(func() { require.NoError(t, connection.Close()) })
++	return db, path
++}
++
+ func setupSecurityEnrollmentTest(t *testing.T) (*model.User, service.AuthIdentity) {
+ 	t.Helper()
+ 	require.NoError(t, i18n.Init())
+@@ -54,8 +97,8 @@ func setupSecurityEnrollmentTest(t *testing.T) (*model.User, service.AuthIdentit
+ 		dialect = "sqlite"
+ 	}
+ 	dsn := os.Getenv("TEST_" + strings.ToUpper(dialect) + "_DSN")
+-	db, _ := newAuditTestDatabase(t, dialect, dsn)
+-	logDB, _ := newAuditTestDatabase(t, dialect, dsn)
++	db, _ := newSecurityTestDatabase(t, dialect, dsn)
++	logDB, _ := newSecurityTestDatabase(t, dialect, dsn)
+ 	db.Logger = logger.Default.LogMode(logger.Silent)
+ 	logDB.Logger = logger.Default.LogMode(logger.Silent)
+ 	versionQuery := "SELECT VERSION()"
