@@ -1,15 +1,22 @@
-From 2fcf5ddfa3096ceb580224e4de80867a4ed846dc Mon Sep 17 00:00:00 2001
+From b3142b1be59e4e1033e9a75d27ea287ba3ccf237 Mon Sep 17 00:00:00 2001
 From: sommio <sommio.mail@gmail.com>
 Date: Tue, 1 Sep 2026 18:12:06 +0800
-Subject: [PATCH 4/8] =?UTF-8?q?feat(audit):=20=E4=BF=9D=E7=95=99=20Chat=20?=
- =?UTF-8?q?Completions=20=E8=A7=92=E8=89=B2=E6=B6=88=E6=81=AF?=
+Subject: [PATCH] =?UTF-8?q?feat(audit):=20=E4=BF=9D=E7=95=99=20Chat=20Comp?=
+ =?UTF-8?q?letions=20=E8=A7=92=E8=89=B2=E6=B6=88=E6=81=AF?=
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit
 
+---
+ audit/sender.go                | 38 ++++++++++++++-------------
+ audit/sender_test.go           | 10 ++++++++
+ controller/relay.go            | 47 ++++++++++++++++++++++++++++++++++
+ controller/relay_audit_test.go | 31 ++++++++++++++++++++++
+ 4 files changed, 108 insertions(+), 18 deletions(-)
+ create mode 100644 controller/relay_audit_test.go
 
 diff --git a/audit/sender.go b/audit/sender.go
-index 3a5a5f0f..1dd6f9c9 100644
+index 3a5a5f0fa48ab8488b9e03c8ca35085b88dffe93..1dd6f9c996a289cdf0e1079ce2feb3075acc6d83 100644
 --- a/audit/sender.go
 +++ b/audit/sender.go
 @@ -22,24 +22,26 @@ const (
@@ -58,7 +65,7 @@ index 3a5a5f0f..1dd6f9c9 100644
  
  type UsageEvent struct {
 diff --git a/audit/sender_test.go b/audit/sender_test.go
-index a6081a84..762852b8 100644
+index a6081a84e119ad8acbd685f96fb53684a0b81876..762852b83794267d88f66a8c4bc964fd60fd0a6b 100644
 --- a/audit/sender_test.go
 +++ b/audit/sender_test.go
 @@ -145,3 +145,13 @@ func TestConversationIDIsSecretBoundAndDoesNotExposeSource(t *testing.T) {
@@ -76,7 +83,7 @@ index a6081a84..762852b8 100644
 +	require.JSONEq(t, `"available"`, string(payload["messages_status"]))
 +}
 diff --git a/controller/relay.go b/controller/relay.go
-index c0785766..c565d144 100644
+index f80442d3c8900d8e20c71a7b14d62c69d93e630e..424ea9f37519992d13220aeb5b00b1dfd94dc116 100644
 --- a/controller/relay.go
 +++ b/controller/relay.go
 @@ -1,6 +1,7 @@
@@ -87,19 +94,20 @@ index c0785766..c565d144 100644
  	"errors"
  	"fmt"
  	"io"
-@@ -132,6 +133,11 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
- 	needSensitiveCheck := setting.ShouldCheckPromptSensitive()
- 	needCountToken := constant.CountToken
+@@ -126,6 +127,12 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
+ 	}
+ 
  	needAuditPrompt := audit.EnabledForToken(c.GetString("token_name"))
 +	var structuredMessages json.RawMessage
 +	messagesStatus := "raw_only"
 +	if needAuditPrompt {
 +		structuredMessages, messagesStatus = auditMessages(c, request, relayconstant.Path2RelayMode(c.Request.URL.Path))
 +	}
- 	// Avoid building huge CombineText (strings.Join) when token counting and sensitive check are both disabled.
++	// Only build the full audit prompt when this token is audited.
  	var meta *types.TokenCountMeta
- 	if needSensitiveCheck || needCountToken || needAuditPrompt {
-@@ -160,6 +166,8 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
+ 	if needAuditPrompt {
+ 		meta = request.GetTokenCountMeta()
+@@ -151,6 +158,8 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
  			ConversationID:     conversationID,
  			ConversationSource: conversationSource,
  			UserDisplayName:    c.GetString("display_name"),
@@ -108,7 +116,7 @@ index c0785766..c565d144 100644
  		})
  	}
  
-@@ -314,6 +322,44 @@ func CountClaudeTokens(c *gin.Context) {
+@@ -282,6 +291,44 @@ func CountClaudeTokens(c *gin.Context) {
  	c.JSON(http.StatusOK, gin.H{"input_tokens": inputTokens})
  }
  
@@ -155,7 +163,7 @@ index c0785766..c565d144 100644
  		return audit.ConversationID(value), "session_id"
 diff --git a/controller/relay_audit_test.go b/controller/relay_audit_test.go
 new file mode 100644
-index 00000000..b61c2a36
+index 0000000000000000000000000000000000000000..b61c2a36f795786562b52f6cbc6d1e6dcb86b4be
 --- /dev/null
 +++ b/controller/relay_audit_test.go
 @@ -0,0 +1,31 @@
@@ -190,6 +198,3 @@ index 00000000..b61c2a36
 +	require.Nil(t, messages)
 +	require.Equal(t, "raw_only", status)
 +}
--- 
-2.53.0
-

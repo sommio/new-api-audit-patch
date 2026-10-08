@@ -1,18 +1,22 @@
-From 9166b67ad77b3e6fb8277a2debfa60f10b3416a3 Mon Sep 17 00:00:00 2001
+From 8392b3d8eb36268480dd8b65c14057b57e197a68 Mon Sep 17 00:00:00 2001
 From: sommio <sommio.mail@gmail.com>
 Date: Tue, 1 Sep 2026 18:23:35 +0800
-Subject: [PATCH 5/8] =?UTF-8?q?feat(audit):=20=E4=BF=9D=E7=95=99=20Respons?=
- =?UTF-8?q?es=20=E8=A7=92=E8=89=B2=E6=B6=88=E6=81=AF?=
+Subject: [PATCH] =?UTF-8?q?feat(audit):=20=E4=BF=9D=E7=95=99=20Responses?=
+ =?UTF-8?q?=20=E8=A7=92=E8=89=B2=E6=B6=88=E6=81=AF?=
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit
 
+---
+ controller/relay.go            | 39 ++++++++++++++++++++++++++++++----
+ controller/relay_audit_test.go | 22 +++++++++++++++++++
+ 2 files changed, 57 insertions(+), 4 deletions(-)
 
 diff --git a/controller/relay.go b/controller/relay.go
-index c565d144..9d2845a3 100644
+index 424ea9f37519992d13220aeb5b00b1dfd94dc116..31859fb370720dda3abdc2b1288641010b52a14e 100644
 --- a/controller/relay.go
 +++ b/controller/relay.go
-@@ -323,9 +323,6 @@ func CountClaudeTokens(c *gin.Context) {
+@@ -292,9 +292,6 @@ func CountClaudeTokens(c *gin.Context) {
  }
  
  func auditMessages(c *gin.Context, request dto.Request, relayMode int) (json.RawMessage, string) {
@@ -22,7 +26,7 @@ index c565d144..9d2845a3 100644
  	storage, err := common.GetBodyStorage(c)
  	if err != nil {
  		return nil, "unreadable"
-@@ -334,7 +331,14 @@ func auditMessages(c *gin.Context, request dto.Request, relayMode int) (json.Raw
+@@ -303,7 +300,14 @@ func auditMessages(c *gin.Context, request dto.Request, relayMode int) (json.Raw
  	if err != nil {
  		return nil, "unreadable"
  	}
@@ -38,7 +42,7 @@ index c565d144..9d2845a3 100644
  }
  
  func extractChatMessages(request dto.Request, body []byte) (json.RawMessage, string) {
-@@ -360,6 +364,33 @@ func extractChatMessages(request dto.Request, body []byte) (json.RawMessage, str
+@@ -329,6 +333,33 @@ func extractChatMessages(request dto.Request, body []byte) (json.RawMessage, str
  	return envelope.Messages, "available"
  }
  
@@ -73,7 +77,7 @@ index c565d144..9d2845a3 100644
  	if value := strings.TrimSpace(c.GetHeader("Session_id")); value != "" {
  		return audit.ConversationID(value), "session_id"
 diff --git a/controller/relay_audit_test.go b/controller/relay_audit_test.go
-index b61c2a36..db2865c5 100644
+index b61c2a36f795786562b52f6cbc6d1e6dcb86b4be..db2865c54a8f6b0278d25d70a81d246f6f654ec1 100644
 --- a/controller/relay_audit_test.go
 +++ b/controller/relay_audit_test.go
 @@ -29,3 +29,25 @@ func TestExtractChatMessagesMarksNonRoleRequestsRawOnly(t *testing.T) {
@@ -102,6 +106,3 @@ index b61c2a36..db2865c5 100644
 +	require.Nil(t, messages)
 +	require.Equal(t, "raw_only", status)
 +}
--- 
-2.53.0
-

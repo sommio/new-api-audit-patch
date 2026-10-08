@@ -1,0 +1,235 @@
+From eeb89c4eede9f2887093324d461ea59d8523b24d Mon Sep 17 00:00:00 2001
+From: sommio <sommio.mail@gmail.com>
+Date: Thu, 8 Oct 2026 10:54:12 +0800
+Subject: [PATCH] =?UTF-8?q?fix(audit):=20=E9=80=82=E9=85=8D=E4=B8=AD?=
+ =?UTF-8?q?=E7=BB=A7=E9=87=8D=E6=9E=84=E5=B9=B6=E9=AA=8C=E8=AF=81=E5=AE=A1?=
+ =?UTF-8?q?=E8=AE=A1=E7=94=9F=E5=91=BD=E5=91=A8=E6=9C=9F?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+---
+ controller/relay.go                        |   1 +
+ controller/relay_audit_integration_test.go | 201 +++++++++++++++++++++
+ 2 files changed, 202 insertions(+)
+ create mode 100644 controller/relay_audit_integration_test.go
+
+diff --git a/controller/relay.go b/controller/relay.go
+index dd3bcdf3e0b25bd9fbdf37eff2473ac9bdf7d865..ea2684fe4c0943b174a7eb62462cbe8f1ded87e2 100644
+--- a/controller/relay.go
++++ b/controller/relay.go
+@@ -24,6 +24,7 @@ import (
+ 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+ 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
+ 	"github.com/QuantumNous/new-api/relay/helper"
++	"github.com/QuantumNous/new-api/relaykit/dto"
+ 	"github.com/QuantumNous/new-api/relaykit/types"
+ 	"github.com/QuantumNous/new-api/service"
+ 	"github.com/QuantumNous/new-api/setting/operation_setting"
+diff --git a/controller/relay_audit_integration_test.go b/controller/relay_audit_integration_test.go
+new file mode 100644
+index 0000000000000000000000000000000000000000..6b0e431415fa22da8fee672484bebf04dd886d8d
+--- /dev/null
++++ b/controller/relay_audit_integration_test.go
+@@ -0,0 +1,201 @@
++package controller
++
++import (
++	"encoding/json"
++	"fmt"
++	"io"
++	"net/http"
++	"net/http/httptest"
++	"os"
++	"os/exec"
++	"strings"
++	"testing"
++	"time"
++
++	"github.com/QuantumNous/new-api/audit"
++	"github.com/QuantumNous/new-api/common"
++	hostconstant "github.com/QuantumNous/new-api/constant"
++	"github.com/QuantumNous/new-api/model"
++	"github.com/QuantumNous/new-api/relaykit/types"
++	"github.com/QuantumNous/new-api/service"
++	"github.com/QuantumNous/new-api/setting"
++	"github.com/QuantumNous/new-api/setting/ratio_setting"
++	"github.com/gin-gonic/gin"
++	"github.com/glebarez/sqlite"
++	"github.com/stretchr/testify/assert"
++	"github.com/stretchr/testify/require"
++	"gorm.io/gorm"
++)
++
++// 每个进程独立初始化审计配置，不能在运行中的 sender 上重置 sync.Once。
++func TestRelayAuditLifecycle(t *testing.T) {
++	mode := os.Getenv("TEST_RELAY_AUDIT_MODE")
++	if mode == "" {
++		binary, err := os.Executable()
++		require.NoError(t, err)
++		for _, mode := range []string{"enabled", "disabled", "excluded", "receiver-error", "success", "success-receiver-error"} {
++			t.Run(mode, func(t *testing.T) {
++				cmd := exec.Command(binary, "-test.run=^TestRelayAuditLifecycle$", "-test.timeout=30s")
++				cmd.Env = append(os.Environ(), "TEST_RELAY_AUDIT_MODE="+mode)
++				output, err := cmd.CombinedOutput()
++				require.NoError(t, err, "%s", output)
++			})
++		}
++		return
++	}
++	type delivered struct {
++		path string
++		body []byte
++	}
++	received := make(chan delivered, 32)
++	receiver := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		body, err := io.ReadAll(r.Body)
++		if err != nil {
++			w.WriteHeader(http.StatusBadRequest)
++			return
++		}
++		received <- delivered{r.URL.Path, body}
++		if strings.HasSuffix(mode, "receiver-error") {
++			w.WriteHeader(http.StatusServiceUnavailable)
++		}
++	}))
++	defer receiver.Close()
++	t.Setenv("AUDIT_ENABLED", fmt.Sprint(mode != "disabled"))
++	t.Setenv("AUDIT_ENDPOINT", receiver.URL)
++	t.Setenv("AUDIT_SECRET", "test-only-secret")
++	t.Setenv("AUDIT_EXCLUDED_TOKEN_NAMES", "excluded-token")
++	t.Setenv("AUDIT_TIMEOUT_MS", "1000")
++	t.Setenv("AUDIT_QUEUE_SIZE", "32")
++	token := "audited-token"
++	if mode == "excluded" {
++		token = "excluded-token"
++	}
++	gin.SetMode(gin.TestMode)
++	hostconstant.CountToken = false
++	hostconstant.StreamingTimeout = 30
++	hostconstant.ErrorLogEnabled = false
++	setting.CheckSensitiveEnabled = false
++	common.LogConsumeEnabled = false
++	common.RedisEnabled = false
++	common.BatchUpdateEnabled = false
++	common.MemoryCacheEnabled = false
++	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
++	require.NoError(t, err)
++	sqlDB, err := db.DB()
++	require.NoError(t, err)
++	defer func() { require.NoError(t, sqlDB.Close()) }()
++	require.NoError(t, db.AutoMigrate(&model.User{}, &model.Channel{}, &model.Token{}, &model.UserSubscription{}))
++	model.DB, model.LOG_DB = db, db
++	require.NoError(t, db.Create(&model.User{Id: 7, Username: "audit-user", Group: "default", Quota: 1000000}).Error)
++	protocols := []struct {
++		name, path, body string
++		format           types.RelayFormat
++	}{
++		{"chat", "/v1/chat/completions", `"messages":[{"role":"user","content":"audit prompt"}]`, types.RelayFormatOpenAI},
++		{"responses", "/v1/responses", `"input":[{"role":"user","content":"audit prompt"}]`, types.RelayFormatOpenAIResponses},
++		{"anthropic", "/v1/messages", `"max_tokens":10,"messages":[{"role":"user","content":"audit prompt"}]`, types.RelayFormatClaude},
++		{"gemini", "/v1beta/models/audit-unpriced:generateContent", `"contents":[{"role":"user","parts":[{"text":"audit prompt"}]}]`, types.RelayFormatGemini},
++	}
++	success := strings.HasPrefix(mode, "success")
++	if success {
++		protocols = protocols[:1]
++		service.InitHttpClient()
++		require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(`{"audit-unpriced":0}`))
++	}
++	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		var request struct {
++			Stream bool `json:"stream"`
++		}
++		if err := common.DecodeJson(r.Body, &request); err != nil {
++			w.WriteHeader(http.StatusBadRequest)
++			return
++		}
++		if request.Stream {
++			w.Header().Set("Content-Type", "text/event-stream")
++			_, _ = io.WriteString(w, "data: {\"id\":\"chat-test\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hello\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"chat-test\",\"choices\":[],\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":2,\"total_tokens\":5}}\n\ndata: [DONE]\n\n")
++		} else {
++			w.Header().Set("Content-Type", "application/json")
++			_, _ = io.WriteString(w, `{"id":"chat-test","object":"chat.completion","model":"audit-unpriced","choices":[{"index":0,"message":{"role":"assistant","content":"hello"},"finish_reason":"stop"}],"usage":{"prompt_tokens":3,"completion_tokens":2,"total_tokens":5}}`)
++		}
++	}))
++	defer upstream.Close()
++	next := func() delivered {
++		select {
++		case event := <-received:
++			return event
++		case <-time.After(5 * time.Second):
++			t.Fatal("audit delivery timed out")
++			return delivered{}
++		}
++	}
++	expected := 0
++	for _, protocol := range protocols {
++		for _, stream := range []bool{false, true} {
++			id := fmt.Sprintf("audit-%s-%t", protocol.name, stream)
++			path := protocol.path
++			if protocol.name == "gemini" && stream {
++				path = strings.ReplaceAll(path, ":generateContent", ":streamGenerateContent")
++			}
++			body := fmt.Sprintf(`{"model":"audit-unpriced","stream":%t,%s}`, stream, protocol.body)
++			recorder := httptest.NewRecorder()
++			ctx, _ := gin.CreateTestContext(recorder)
++			ctx.Request = httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
++			ctx.Request.Header.Set("Content-Type", "application/json")
++			ctx.Set(common.RequestIdKey, id)
++			ctx.Set("id", 7)
++			ctx.Set("username", "audit-user")
++			ctx.Set("token_id", 11)
++			ctx.Set("token_unlimited_quota", true)
++			ctx.Set("token_name", token)
++			ctx.Set("original_model", "audit-unpriced")
++			ctx.Set("group", "default")
++			ctx.Set("channel_type", hostconstant.ChannelTypeOpenAI)
++			ctx.Set("base_url", upstream.URL)
++			Relay(ctx, protocol.format)
++			common.CleanupBodyStorage(ctx)
++			// 未配置价格必须继续由上游拒绝；审计不能改变错误处理和计费行为。
++			if success {
++				require.Equal(t, http.StatusOK, recorder.Code, "%s", recorder.Body.String())
++				require.Contains(t, recorder.Body.String(), "hello")
++			} else {
++				require.Equal(t, http.StatusBadRequest, recorder.Code, "%s", recorder.Body.String())
++				require.Contains(t, recorder.Body.String(), "price")
++			}
++			if !success {
++				model.RecordConsumeLog(ctx, 7, model.RecordConsumeLogParams{ModelName: "audit-unpriced", TokenName: token, TokenId: 11, PromptTokens: 3, CompletionTokens: 2})
++			}
++			if mode != "disabled" && mode != "excluded" {
++				event := next()
++				require.Equal(t, "/internal/new-api/audit/request", event.path)
++				var request audit.RequestEvent
++				require.NoError(t, common.Unmarshal(event.body, &request))
++				assert.Equal(t, id, request.RequestId)
++				assert.Equal(t, stream, request.IsStream)
++				assert.Equal(t, "available", request.MessagesStatus)
++				assert.Contains(t, request.PromptText, "audit prompt")
++				var messages []json.RawMessage
++				require.NoError(t, common.Unmarshal(request.Messages, &messages))
++				assert.Len(t, messages, 1)
++				// 日志关闭时用量仍送审，且沿用同一请求标识。
++				usage := next()
++				require.Equal(t, "/internal/new-api/audit/usage", usage.path)
++				var payload audit.UsageEvent
++				require.NoError(t, common.Unmarshal(usage.body, &payload))
++				assert.Equal(t, id, payload.RequestId)
++				assert.Equal(t, 3, payload.PromptTokens)
++				expected += 2
++			}
++		}
++	}
++	if mode != "disabled" {
++		// FIFO 屏障：收到标记意味着先前所有事件均已处理，无重试或重复入队。
++		audit.EnqueueUsage(audit.UsageEvent{RequestId: "barrier", TokenName: "audited-token"})
++		marker := next()
++		var usage audit.UsageEvent
++		require.NoError(t, common.Unmarshal(marker.body, &usage))
++		require.Equal(t, "barrier", usage.RequestId)
++	}
++	assert.False(t, audit.EnabledForToken("excluded-token"))
++	assert.Equal(t, mode != "disabled", audit.EnabledForToken("audited-token"))
++	assert.Empty(t, received, "unexpected duplicate or excluded audit event; consumed %d", expected)
++}

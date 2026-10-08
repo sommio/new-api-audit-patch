@@ -17,6 +17,16 @@ Published tags:
 Deploy by digest, not the moving `latest` tag. Version and short-SHA tags may
 also be republished if this patch queue changes.
 
+## Patch maintenance and verification
+
+The current patch base is upstream `v1.0.0-rc.41` (`2035a82aeb5414253a728bd937d4b8f97aa99b9b`), recorded in `UPSTREAM_BASE`. Publishing still follows GitHub's latest non-prerelease Release rather than pinning an older version; `rc` in a tag name is not the GitHub prerelease flag.
+
+Patch, script, and workflow changes in PRs and on main verify both the fixed base and the latest Release. The fixed base checks file blobs after every patch; the latest Release permits legitimate three-way merge changes but must pass the same formatting, full-queue diff lint, vet, build, and test gates. Audit regressions cover role messages for all four protocols, disabled auditing, excluded tokens, streaming, request failures, receiver failures, and request/usage correlation.
+
+Publishing runs the same checks separately on amd64 and arm64 before building images; multi-architecture tags advance only after both succeed. Upstream incompatibility fails closed without skipping patches or downgrading automatically; `latest` retains the last successful release. Deploy by digest and roll back using the previous digest recorded before publishing.
+
+**Coverage limitation:** The upstream Responses WebSocket transport (`GET /v1/responses`) is not yet wired into request auditing: it produces no request/role-message event, and settlement may produce only a usage event. This is not a `raw_only` fallback. The channel option `responses_websocket_enabled` defaults to `false`; deployments requiring complete request auditing must keep it disabled. Role-message support for the four protocols refers to HTTP requests, including SSE responses.
+
 ## Documentation
 
 - [使用指南 / Usage](docs/zh/usage.md) · [English](docs/en/usage.md) — deploy and configure the patched gateway

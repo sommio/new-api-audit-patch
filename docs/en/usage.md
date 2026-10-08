@@ -59,24 +59,28 @@ services:
 - Role-preserved request evidence covers Chat Completions, Responses (including `/v1/responses/compact`), Anthropic Messages, and Gemini GenerateContent. Endpoints without explicit role messages remain `raw_only`; see the [webhook contract](webhook.md).
 - Events without a `request_id` are dropped.
 
+**Coverage limitation:** The upstream Responses WebSocket transport (`GET /v1/responses`) is not yet wired into request auditing: it produces no request/role-message event, and settlement may produce only a usage event. This is not a `raw_only` fallback. The channel option `responses_websocket_enabled` defaults to `false`; deployments requiring complete request auditing must keep it disabled. Role-message support for the four protocols refers to HTTP requests, including SSE responses.
+
 ## Building from Source
 
-The patch queue is based on upstream commit `36dbbf0f` (see `UPSTREAM_BASE`); apply in order:
+The patch queue is based on upstream commit `2035a82a` (see `UPSTREAM_BASE`); apply in order:
 
 ```bash
 git clone https://github.com/QuantumNous/new-api.git upstream
-cd upstream && git checkout 36dbbf0f
+cd upstream && git checkout 2035a82a
 git am --3way /path/to/patches/*.patch
 ```
 
-Patch files are generated with `git format-patch`; do not edit their diff or `index` lines manually. Pull requests verify application and index blobs against both `UPSTREAM_BASE` and the latest upstream formal release.
+Patch files are generated with `git format-patch`; do not edit their diff or `index` lines manually. Pull requests and main-branch changes verify both `UPSTREAM_BASE` and the latest upstream formal release. Only the fixed base checks index blobs after every patch; the latest Release permits legitimate three-way merges. Both must pass the full source checks and behavioral tests.
 
-Verify:
+Verify (requires Git, Go, make, and golangci-lint v2.13.1; use Go 1.27.0 to match CI):
 
 ```bash
-gofmt -l audit controller/relay.go model/log.go model/user.go model/user_cache.go
-git diff --check
-go test ./audit ./model ./controller
+# Run at the patch repository root; upstream is a clean, unpatched checkout.
+scripts/test-verify-patch-queue.sh
+base_sha=$(git -C upstream rev-parse HEAD)
+scripts/verify-patch-queue.sh upstream patches
+scripts/verify-patched-source.sh upstream "$base_sha"
 ```
 
 ## Verifying Audit Is Active

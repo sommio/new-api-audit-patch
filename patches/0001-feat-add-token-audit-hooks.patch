@@ -1,12 +1,18 @@
-From ac4ef1a3120b3e4ad0614c3b7c599743aced4829 Mon Sep 17 00:00:00 2001
+From 466985520b29649ae4fe2379f58c4ada726cf884 Mon Sep 17 00:00:00 2001
 From: ck_235 <ck_235@sina.com>
 Date: Tue, 2 Jun 2026 22:42:43 +0800
-Subject: [PATCH 1/8] feat: add token audit hooks
+Subject: [PATCH] feat: add token audit hooks
 
+---
+ audit/sender.go     | 224 ++++++++++++++++++++++++++++++++++++++++++++
+ controller/relay.go |  26 +++++
+ model/log.go        |  23 +++++
+ 3 files changed, 273 insertions(+)
+ create mode 100644 audit/sender.go
 
 diff --git a/audit/sender.go b/audit/sender.go
 new file mode 100644
-index 00000000..7fc949f0
+index 0000000000000000000000000000000000000000..7fc949f06c1824781ec336ceb05c9939ed619998
 --- /dev/null
 +++ b/audit/sender.go
 @@ -0,0 +1,224 @@
@@ -235,7 +241,7 @@ index 00000000..7fc949f0
 +	return result
 +}
 diff --git a/controller/relay.go b/controller/relay.go
-index 9da14e33..47caf518 100644
+index 21c91381906c5e2fb0c33f5fd6ab8eeb07518f39..9889fd15235fa3b48c45d04047b59c9bc2c798d8 100644
 --- a/controller/relay.go
 +++ b/controller/relay.go
 @@ -9,6 +9,7 @@ import (
@@ -246,20 +252,16 @@ index 9da14e33..47caf518 100644
  	"github.com/QuantumNous/new-api/common"
  	"github.com/QuantumNous/new-api/constant"
  	taskdto "github.com/QuantumNous/new-api/dto"
-@@ -130,14 +131,34 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
- 
- 	needSensitiveCheck := setting.ShouldCheckPromptSensitive()
- 	needCountToken := constant.CountToken
-+	needAuditPrompt := audit.EnabledForToken(c.GetString("token_name"))
- 	// Avoid building huge CombineText (strings.Join) when token counting and sensitive check are both disabled.
- 	var meta *types.TokenCountMeta
--	if needSensitiveCheck || needCountToken {
-+	if needSensitiveCheck || needCountToken || needAuditPrompt {
- 		meta = request.GetTokenCountMeta()
- 	} else {
- 		meta = fastTokenCountMetaForPricing(request)
+@@ -124,6 +125,31 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
+ 		return
  	}
  
++	needAuditPrompt := audit.EnabledForToken(c.GetString("token_name"))
++	var meta *types.TokenCountMeta
++	if needAuditPrompt {
++		meta = request.GetTokenCountMeta()
++	}
++
 +	if needAuditPrompt && meta != nil {
 +		promptText := meta.CombineText
 +		audit.EnqueueRequest(audit.RequestEvent{
@@ -279,11 +281,11 @@ index 9da14e33..47caf518 100644
 +		})
 +	}
 +
- 	if needSensitiveCheck && meta != nil {
- 		contains, words := service.CheckSensitiveText(meta.CombineText)
- 		if contains {
+ 	defer func() {
+ 		recovered := recover()
+ 		resultErr := newAPIError
 diff --git a/model/log.go b/model/log.go
-index a0407d53..4e4147e6 100644
+index a56d26e428ef6c1e6743e76ddde7bd8dbcb6978b..170880561b6449a48d6bccf0651088b7aeab562b 100644
 --- a/model/log.go
 +++ b/model/log.go
 @@ -7,6 +7,7 @@ import (
@@ -337,6 +339,3 @@ index a0407d53..4e4147e6 100644
  type RecordTaskBillingLogParams struct {
  	UserId    int
  	LogType   int
--- 
-2.53.0
-

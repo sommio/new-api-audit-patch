@@ -5,7 +5,15 @@ on:
     paths:
       - 'UPSTREAM_BASE'
       - 'patches/**'
-      - 'scripts/verify-patch-queue.sh'
+      - 'scripts/**'
+      - '.github/workflows/**'
+  push:
+    branches: [main]
+    paths:
+      - 'UPSTREAM_BASE'
+      - 'patches/**'
+      - 'scripts/**'
+      - '.github/workflows/**'
   workflow_dispatch:
 
 permissions:
@@ -18,9 +26,13 @@ jobs:
       matrix:
         target: [base, latest-release]
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       - name: Check out patch queue
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Test patch verifier
+        run: scripts/test-verify-patch-queue.sh
 
       - name: Resolve upstream revision
         id: upstream
@@ -31,7 +43,7 @@ jobs:
             sha=$(cat UPSTREAM_BASE)
           else
             tag=$(gh api repos/QuantumNous/new-api/releases/latest --jq .tag_name)
-            sha=$(git ls-remote https://github.com/QuantumNous/new-api.git "refs/tags/$tag^{}" "refs/tags/$tag" | head -1 | cut -f1)
+            sha=$(git ls-remote https://github.com/QuantumNous/new-api.git "refs/tags/$tag" "refs/tags/$tag^{}" | awk '{ if ($2 ~ /\^\{\}$/) peeled=$1; else direct=$1 } END { print (peeled != "" ? peeled : direct) }')
           fi
           test -n "$sha"
           echo "sha=$sha" >> "$GITHUB_OUTPUT"
@@ -45,7 +57,24 @@ jobs:
           fetch-depth: 0
 
       - name: Apply and verify patches
-        run: |
-          git -C upstream config user.name 'new-api-audit-patch[bot]'
-          git -C upstream config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          scripts/verify-patch-queue.sh upstream patches
+        id: patches
+        env:
+          GIT_COMMITTER_NAME: new-api-audit-patch[bot]
+          GIT_COMMITTER_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
+        run: scripts/verify-patch-queue.sh upstream patches
+
+      - name: Set up Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version: '1.27.0'
+          cache-dependency-path: |
+            upstream/go.sum
+            upstream/relaykit/go.sum
+
+      - name: Install Go linter
+        run: go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.13.1
+
+      - name: Verify patched source
+        env:
+          BASE_SHA: ${{ steps.patches.outputs.base_sha }}
+        run: scripts/verify-patched-source.sh upstream "$BASE_SHA"

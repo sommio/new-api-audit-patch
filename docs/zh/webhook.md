@@ -1,6 +1,8 @@
 # 审计事件契约（外部数据获取）
 
-打补丁后的网关将每个中继请求的审计事件异步 POST 到 `AUDIT_ENDPOINT`，外部系统（审计/报表服务）通过这两个端点获取数据：
+打补丁后的网关将受支持中继路径的审计事件异步 POST 到 `AUDIT_ENDPOINT`，外部系统（审计/报表服务）通过这两个端点获取数据：
+
+**覆盖限制：**上游新增的 Responses WebSocket（`GET /v1/responses`）尚未接入请求审计，不生成 request／角色消息事件；结算时可能仅有 usage 事件。这不是 `raw_only` 降级。渠道选项 `responses_websocket_enabled` 默认是 `false`；依赖完整请求审计的部署必须保持关闭。四类协议的角色消息支持指 HTTP 请求（含 SSE 响应）。
 
 | Method | 路径 | 事件 |
 | --- | --- | --- |

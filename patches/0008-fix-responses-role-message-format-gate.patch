@@ -1,19 +1,23 @@
-From c7f6d6896007bafef74fa5382a047a79a73ece48 Mon Sep 17 00:00:00 2001
+From e1d00b77dc5e062639c2e84641d7e012704e9d2f Mon Sep 17 00:00:00 2001
 From: sommio <sommio.mail@gmail.com>
 Date: Wed, 2 Sep 2026 11:04:50 +0800
-Subject: [PATCH 8/8] =?UTF-8?q?fix(audit):=20=E4=BF=AE=E5=A4=8D=20Response?=
- =?UTF-8?q?s=20=E8=A7=92=E8=89=B2=E6=B6=88=E6=81=AF=E6=A0=BC=E5=BC=8F?=
- =?UTF-8?q?=E9=97=A8=E7=A6=81?=
+Subject: [PATCH] =?UTF-8?q?fix(audit):=20=E4=BF=AE=E5=A4=8D=20Responses=20?=
+ =?UTF-8?q?=E8=A7=92=E8=89=B2=E6=B6=88=E6=81=AF=E6=A0=BC=E5=BC=8F=E9=97=A8?=
+ =?UTF-8?q?=E7=A6=81?=
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit
 
+---
+ controller/relay.go            |  6 ++++--
+ controller/relay_audit_test.go | 35 ++++++++++++++++++++++++++++++++++
+ 2 files changed, 39 insertions(+), 2 deletions(-)
 
 diff --git a/controller/relay.go b/controller/relay.go
-index 21a6588d..119afe33 100644
+index 15a21f650a5a7c0d6ffce68c5fe9c4d94d2c6728..dd3bcdf3e0b25bd9fbdf37eff2473ac9bdf7d865 100644
 --- a/controller/relay.go
 +++ b/controller/relay.go
-@@ -325,7 +325,7 @@ func CountClaudeTokens(c *gin.Context) {
+@@ -294,7 +294,7 @@ func CountClaudeTokens(c *gin.Context) {
  func auditMessages(c *gin.Context, request dto.Request, relayFormat types.RelayFormat, relayMode int) (json.RawMessage, string) {
  	switch relayFormat {
  	case types.RelayFormatClaude:
@@ -22,7 +26,7 @@ index 21a6588d..119afe33 100644
  	default:
  		return nil, "raw_only"
  	}
-@@ -382,7 +382,9 @@ func extractChatMessages(request dto.Request, body []byte) (json.RawMessage, str
+@@ -351,7 +351,9 @@ func extractChatMessages(request dto.Request, body []byte) (json.RawMessage, str
  }
  
  func extractResponsesMessages(request dto.Request, body []byte) (json.RawMessage, string) {
@@ -34,7 +38,7 @@ index 21a6588d..119afe33 100644
  	}
  	var envelope struct {
 diff --git a/controller/relay_audit_test.go b/controller/relay_audit_test.go
-index 318d2330..b0a52e4f 100644
+index 318d23306cab8587e85cea0d644a5939c5cf0af7..b0a52e4f3b955f794cd40b269ba31c6131d782b7 100644
 --- a/controller/relay_audit_test.go
 +++ b/controller/relay_audit_test.go
 @@ -2,9 +2,16 @@ package controller
@@ -86,6 +90,3 @@ index 318d2330..b0a52e4f 100644
 +		})
 +	}
 +}
--- 
-2.53.0
-

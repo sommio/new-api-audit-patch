@@ -59,24 +59,28 @@ services:
 - 角色保留的请求证据覆盖 Chat Completions、Responses（包括 `/v1/responses/compact`）、Anthropic Messages 和 Gemini GenerateContent。没有明确角色消息的端点保持 `raw_only`；详见 [webhook 契约](webhook.md)。
 - 无 `request_id` 的事件直接丢弃。
 
+**覆盖限制：**上游新增的 Responses WebSocket（`GET /v1/responses`）尚未接入请求审计，不生成 request／角色消息事件；结算时可能仅有 usage 事件。这不是 `raw_only` 降级。渠道选项 `responses_websocket_enabled` 默认是 `false`；依赖完整请求审计的部署必须保持关闭。四类协议的角色消息支持指 HTTP 请求（含 SSE 响应）。
+
 ## 源码方式使用
 
-补丁队列基于上游提交 `36dbbf0f`（见 `UPSTREAM_BASE`），按序应用：
+补丁队列基于上游提交 `2035a82a`（见 `UPSTREAM_BASE`），按序应用：
 
 ```bash
 git clone https://github.com/QuantumNous/new-api.git upstream
-cd upstream && git checkout 36dbbf0f
+cd upstream && git checkout 2035a82a
 git am --3way /path/to/patches/*.patch
 ```
 
-补丁文件由 `git format-patch` 生成，不要手工编辑其 diff 或 `index` 行。Pull Request 会同时针对 `UPSTREAM_BASE` 和最新上游正式 Release 验证补丁应用与 index blob。
+补丁文件由 `git format-patch` 生成，不要手工编辑其 diff 或 `index` 行。Pull Request 与 main 分支变更会同时验证 `UPSTREAM_BASE` 和最新上游正式 Release。仅固定基线核对逐补丁 index blob；最新 Release 允许合法三方合并，两者均须通过完整源码检查和行为测试。
 
-验证：
+验证（需要 Git、Go、make 和 golangci-lint v2.13.1；与 CI 一致使用 Go 1.27.0）：
 
 ```bash
-gofmt -l audit controller/relay.go model/log.go model/user.go model/user_cache.go
-git diff --check
-go test ./audit ./model ./controller
+# 在补丁仓库根目录运行；upstream 是尚未打补丁的干净上游工作副本。
+scripts/test-verify-patch-queue.sh
+base_sha=$(git -C upstream rev-parse HEAD)
+scripts/verify-patch-queue.sh upstream patches
+scripts/verify-patched-source.sh upstream "$base_sha"
 ```
 
 ## 验证审计生效

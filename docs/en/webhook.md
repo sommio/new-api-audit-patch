@@ -1,6 +1,8 @@
 # Audit Webhook Contract (External Data Access)
 
-The patched gateway asynchronously POSTs audit events for every relay request to `AUDIT_ENDPOINT`. External systems (audit/reporting services) consume data through these two endpoints:
+The patched gateway asynchronously POSTs audit events for supported relay paths to `AUDIT_ENDPOINT`. External systems (audit/reporting services) consume data through these two endpoints:
+
+**Coverage limitation:** The upstream Responses WebSocket transport (`GET /v1/responses`) is not yet wired into request auditing: it produces no request/role-message event, and settlement may produce only a usage event. This is not a `raw_only` fallback. The channel option `responses_websocket_enabled` defaults to `false`; deployments requiring complete request auditing must keep it disabled. Role-message support for the four protocols refers to HTTP requests, including SSE responses.
 
 | Method | Path | Event |
 | --- | --- | --- |
