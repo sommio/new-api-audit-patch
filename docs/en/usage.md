@@ -59,15 +59,23 @@ services:
 - Role-preserved request evidence covers Chat Completions, Responses (including `/v1/responses/compact`), Anthropic Messages, and Gemini GenerateContent. Endpoints without explicit role messages remain `raw_only`; see the [webhook contract](webhook.md).
 - Events without a `request_id` are dropped.
 
-**Coverage limitation:** The upstream Responses WebSocket transport (`GET /v1/responses`) is not yet wired into request auditing: it produces no request/role-message event, and settlement may produce only a usage event. This is not a `raw_only` fallback. The channel option `responses_websocket_enabled` defaults to `false`; deployments requiring complete request auditing must keep it disabled. Role-message support for the four protocols refers to HTTP requests, including SSE responses.
+**Responses WebSocket:** Each `response.create` on `GET /v1/responses` that passes per-request authentication, rate limiting, and format validation produces one independent request event before forwarding. Top-level and nested `response` payloads share the HTTP audit entry point; `request_id` is the per-message ID (within the receiver's 96-character limit), with `request_path=/v1/responses`, `relay_format=openai_responses`, and `is_stream=true`. Requests on one connection remain separate, and channel retries do not duplicate capture. Actual settlement uses the same ID for usage; no usage is fabricated without settlement. Cancel frames, malformed messages, authentication failures, and concurrent-create rejections do not create normal request records. Evidence already captured for an admitted request survives cancellation, disconnect, or upstream failure.
+
+Only input actually submitted by the client in this request is retained. Server history referenced by `previous_response_id` is neither recovered nor inferred, and newly generated response-side content is not separately recorded. Role arrays preserve order; string `input` remains `messages_status=raw_only`, without invented roles. Conversation correlation prefers `Session_id`, then `prompt_cache_key`, both HMAC-derived; no signal means no fabricated conversation ID. The receiver continues to trim tool outputs/results, image base64, and other machine payloads, retaining allowed roles and tool-call `name`/`arguments`. With employee `audit_enabled=false`, request records remain but content is not retained; new employees default to disabled.
+
+Responses `function_call`, `custom_tool_call`, and `reasoning` items can be structured evidence even without `role`; tool-output-only input does not acquire an invented role. Oversized request events compact only `prompt_text`; if `messages` still exceeds the limit, the entire request event is dropped and a later usage event may be the only record.
+
+The accompanying Token Audit receiver no longer stores plaintext `prompt_preview` for newly received `messages_status=available` events, preventing untrimmed flat text from bypassing role filtering, even when all messages are discarded. Compatible previews for `raw_only` are unchanged, and historical previews are not automatically cleaned up. No schema migration is needed, but this privacy fix requires upgrading the audit receiver as well.
+
+The channel option `responses_websocket_enabled` still defaults to `false`; enable it only as needed after deploying a verified image containing this patch. HTTP support for the four protocols and SSE is unchanged. This is not coverage for every WebSocket protocol; `/v1/realtime` is outside this addition. Gateway `AUDIT_ENABLED`, excluded tokens, and the existing single-worker in-memory queue still apply: at-most-once delivery, no retries, no disk persistence. Full queues, oversized events that cannot be compacted, receiver errors, and timeouts can lose events; delivery is not zero-loss and does not block forwarding.
 
 ## Building from Source
 
-The patch queue is based on upstream commit `2035a82a` (see `UPSTREAM_BASE`); apply in order:
+The patch queue is based on upstream commit `633b4c5b` (see `UPSTREAM_BASE`); apply in order:
 
 ```bash
 git clone https://github.com/QuantumNous/new-api.git upstream
-cd upstream && git checkout 2035a82a
+cd upstream && git checkout 633b4c5b
 git am --3way /path/to/patches/*.patch
 ```
 

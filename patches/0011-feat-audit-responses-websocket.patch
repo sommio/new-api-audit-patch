@@ -1,0 +1,1007 @@
+From 908c1f657b215c7403a09bf2300a28384dffead3 Mon Sep 17 00:00:00 2001
+From: sommio <sommio.mail@gmail.com>
+Date: Thu, 15 Oct 2026 13:14:33 +0800
+Subject: [PATCH] =?UTF-8?q?feat(audit):=20=E9=87=87=E9=9B=86=20Responses?=
+ =?UTF-8?q?=20WebSocket=20=E8=AF=B7=E6=B1=82=E8=AF=81=E6=8D=AE?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+在逐请求鉴权与规范化之后、渠道重试之前采集，HTTP 共用组装入口。显式传入规范化字节，避免嵌套帧缓存及空文本漏采。
+---
+ controller/relay.go                        | 269 +-------------------
+ controller/relay_audit.go                  | 280 +++++++++++++++++++++
+ controller/relay_audit_integration_test.go | 200 +++++++++++++++
+ controller/relay_audit_test.go             |  30 ++-
+ controller/responses_websocket.go          |   5 +-
+ relay/responses_websocket.go               |  14 +-
+ relay/responses_websocket_test.go          |   2 +-
+ 7 files changed, 519 insertions(+), 281 deletions(-)
+ create mode 100644 controller/relay_audit.go
+
+diff --git a/controller/relay.go b/controller/relay.go
+index 9b434665712c80e5e29105fadfac8dee5509094c..4f80d1ddec4669eb7f9d2e8594bf21b741349082 100644
+--- a/controller/relay.go
++++ b/controller/relay.go
+@@ -1,7 +1,6 @@
+ package controller
+ 
+ import (
+-	"encoding/json"
+ 	"errors"
+ 	"fmt"
+ 	"io"
+@@ -10,7 +9,6 @@ import (
+ 	"strings"
+ 	"time"
+ 
+-	"github.com/QuantumNous/new-api/audit"
+ 	"github.com/QuantumNous/new-api/common"
+ 	"github.com/QuantumNous/new-api/constant"
+ 	taskdto "github.com/QuantumNous/new-api/dto"
+@@ -25,7 +23,6 @@ import (
+ 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+ 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
+ 	"github.com/QuantumNous/new-api/relay/helper"
+-	"github.com/QuantumNous/new-api/relaykit/dto"
+ 	"github.com/QuantumNous/new-api/relaykit/types"
+ 	"github.com/QuantumNous/new-api/service"
+ 	"github.com/QuantumNous/new-api/setting/operation_setting"
+@@ -128,42 +125,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
+ 		return
+ 	}
+ 
+-	needAuditPrompt := audit.EnabledForToken(c.GetString("token_name"))
+-	var structuredMessages json.RawMessage
+-	messagesStatus := "raw_only"
+-	if needAuditPrompt {
+-		structuredMessages, messagesStatus = auditMessages(c, request, relayFormat, relayconstant.Path2RelayMode(c.Request.URL.Path))
+-	}
+-	// Only build the full audit prompt when this token is audited.
+-	var meta *types.TokenCountMeta
+-	if needAuditPrompt {
+-		meta = request.GetTokenCountMeta()
+-	}
+-
+-	if needAuditPrompt && meta != nil {
+-		promptText := meta.CombineText
+-		conversationID, conversationSource := auditConversation(c, request)
+-		audit.EnqueueRequest(audit.RequestEvent{
+-			RequestId:          requestId,
+-			CreatedAt:          time.Now().UTC().Format(time.RFC3339Nano),
+-			UserId:             relayInfo.UserId,
+-			Username:           c.GetString("username"),
+-			TokenId:            relayInfo.TokenId,
+-			TokenName:          c.GetString("token_name"),
+-			ModelName:          relayInfo.OriginModelName,
+-			RequestPath:        c.Request.URL.Path,
+-			RelayFormat:        string(relayFormat),
+-			IsStream:           relayInfo.IsStream,
+-			PromptHash:         audit.HashText(promptText),
+-			PromptPreview:      audit.PreviewText(promptText, 500),
+-			PromptText:         promptText,
+-			ConversationID:     conversationID,
+-			ConversationSource: conversationSource,
+-			UserDisplayName:    c.GetString("display_name"),
+-			Messages:           structuredMessages,
+-			MessagesStatus:     messagesStatus,
+-		})
+-	}
++	enqueueRelayAudit(c, request, relayFormat, relayInfo.OriginModelName, relayInfo.IsStream, nil)
+ 
+ 	defer func() {
+ 		recovered := recover()
+@@ -293,235 +255,6 @@ func CountClaudeTokens(c *gin.Context) {
+ 	c.JSON(http.StatusOK, gin.H{"input_tokens": inputTokens})
+ }
+ 
+-func auditMessages(c *gin.Context, request dto.Request, relayFormat types.RelayFormat, relayMode int) (json.RawMessage, string) {
+-	switch relayFormat {
+-	case types.RelayFormatClaude:
+-	case types.RelayFormatOpenAI, types.RelayFormatOpenAIResponses, types.RelayFormatOpenAIResponsesCompaction, types.RelayFormatGemini:
+-	default:
+-		return nil, "raw_only"
+-	}
+-	if relayFormat == types.RelayFormatGemini {
+-		if _, ok := request.(*dto.GeminiChatRequest); !ok {
+-			return nil, "raw_only"
+-		}
+-	}
+-	storage, err := common.GetBodyStorage(c)
+-	if err != nil {
+-		return nil, "unreadable"
+-	}
+-	body, err := storage.Bytes()
+-	if err != nil {
+-		return nil, "unreadable"
+-	}
+-	if relayFormat == types.RelayFormatClaude {
+-		return extractAnthropicMessages(request, body)
+-	}
+-	if relayFormat == types.RelayFormatGemini {
+-		return extractGeminiMessages(request, body)
+-	}
+-	switch relayMode {
+-	case relayconstant.RelayModeChatCompletions:
+-		return extractChatMessages(request, body)
+-	case relayconstant.RelayModeResponses, relayconstant.RelayModeResponsesCompact:
+-		return extractResponsesMessages(request, body)
+-	default:
+-		return nil, "raw_only"
+-	}
+-}
+-
+-func extractChatMessages(request dto.Request, body []byte) (json.RawMessage, string) {
+-	if _, ok := request.(*dto.GeneralOpenAIRequest); !ok {
+-		return nil, "raw_only"
+-	}
+-	var envelope struct {
+-		Messages json.RawMessage `json:"messages"`
+-	}
+-	if err := json.Unmarshal(body, &envelope); err != nil {
+-		return nil, "unreadable"
+-	}
+-	if len(envelope.Messages) == 0 || string(envelope.Messages) == "null" {
+-		return nil, "raw_only"
+-	}
+-	if !json.Valid(envelope.Messages) {
+-		return nil, "unreadable"
+-	}
+-	var messages []json.RawMessage
+-	if err := json.Unmarshal(envelope.Messages, &messages); err != nil || len(messages) == 0 {
+-		return nil, "raw_only"
+-	}
+-	return envelope.Messages, "available"
+-}
+-
+-func extractResponsesMessages(request dto.Request, body []byte) (json.RawMessage, string) {
+-	switch request.(type) {
+-	case *dto.OpenAIResponsesRequest, *dto.OpenAIResponsesCompactionRequest:
+-	default:
+-		return nil, "raw_only"
+-	}
+-	var envelope struct {
+-		Input json.RawMessage `json:"input"`
+-	}
+-	if err := json.Unmarshal(body, &envelope); err != nil {
+-		return nil, "unreadable"
+-	}
+-	if len(envelope.Input) == 0 || string(envelope.Input) == "null" {
+-		return nil, "raw_only"
+-	}
+-	var inputs []struct {
+-		Role string `json:"role"`
+-	}
+-	if err := json.Unmarshal(envelope.Input, &inputs); err != nil || len(inputs) == 0 {
+-		return nil, "raw_only"
+-	}
+-	for _, input := range inputs {
+-		if strings.TrimSpace(input.Role) != "" {
+-			return envelope.Input, "available"
+-		}
+-	}
+-	return nil, "raw_only"
+-}
+-
+-func extractAnthropicMessages(request dto.Request, body []byte) (json.RawMessage, string) {
+-	if _, ok := request.(*dto.ClaudeRequest); !ok {
+-		return nil, "raw_only"
+-	}
+-	var envelope struct {
+-		System   json.RawMessage `json:"system"`
+-		Messages json.RawMessage `json:"messages"`
+-	}
+-	if err := json.Unmarshal(body, &envelope); err != nil {
+-		return nil, "unreadable"
+-	}
+-
+-	messages := make([]json.RawMessage, 0)
+-	if len(envelope.System) > 0 && string(envelope.System) != "null" {
+-		system, err := json.Marshal(struct {
+-			Role    string          `json:"role"`
+-			Content json.RawMessage `json:"content"`
+-		}{Role: "system", Content: envelope.System})
+-		if err != nil {
+-			return nil, "unreadable"
+-		}
+-		messages = append(messages, system)
+-	}
+-	if len(envelope.Messages) == 0 || string(envelope.Messages) == "null" {
+-		if len(messages) == 0 {
+-			return nil, "raw_only"
+-		}
+-		result, err := json.Marshal(messages)
+-		if err != nil {
+-			return nil, "unreadable"
+-		}
+-		return result, "available"
+-	}
+-
+-	var original []json.RawMessage
+-	if err := json.Unmarshal(envelope.Messages, &original); err != nil {
+-		return nil, "unreadable"
+-	}
+-	if len(original) == 0 {
+-		return nil, "raw_only"
+-	}
+-	for _, message := range original {
+-		var role struct {
+-			Role string `json:"role"`
+-		}
+-		if err := json.Unmarshal(message, &role); err != nil {
+-			return nil, "unreadable"
+-		}
+-		if role.Role != "user" && role.Role != "assistant" {
+-			return nil, "raw_only"
+-		}
+-		messages = append(messages, message)
+-	}
+-	result, err := json.Marshal(messages)
+-	if err != nil {
+-		return nil, "unreadable"
+-	}
+-	return result, "available"
+-}
+-
+-func extractGeminiMessages(request dto.Request, body []byte) (json.RawMessage, string) {
+-	if _, ok := request.(*dto.GeminiChatRequest); !ok {
+-		return nil, "raw_only"
+-	}
+-	var envelope struct {
+-		SystemInstruction      json.RawMessage `json:"systemInstruction"`
+-		SystemInstructionSnake json.RawMessage `json:"system_instruction"`
+-		Contents               json.RawMessage `json:"contents"`
+-	}
+-	if err := json.Unmarshal(body, &envelope); err != nil {
+-		return nil, "unreadable"
+-	}
+-
+-	messages := make([]json.RawMessage, 0)
+-	for _, instruction := range []json.RawMessage{envelope.SystemInstruction, envelope.SystemInstructionSnake} {
+-		if len(instruction) == 0 || string(instruction) == "null" {
+-			continue
+-		}
+-		system, err := json.Marshal(struct {
+-			Role    string          `json:"role"`
+-			Content json.RawMessage `json:"content"`
+-		}{Role: "system", Content: instruction})
+-		if err != nil {
+-			return nil, "unreadable"
+-		}
+-		messages = append(messages, system)
+-	}
+-	if len(envelope.Contents) == 0 || string(envelope.Contents) == "null" {
+-		if len(messages) == 0 {
+-			return nil, "raw_only"
+-		}
+-		result, err := json.Marshal(messages)
+-		if err != nil {
+-			return nil, "unreadable"
+-		}
+-		return result, "available"
+-	}
+-
+-	var contents []json.RawMessage
+-	if err := json.Unmarshal(envelope.Contents, &contents); err != nil || len(contents) == 0 {
+-		return nil, "raw_only"
+-	}
+-	for _, content := range contents {
+-		var role struct {
+-			Role string `json:"role"`
+-		}
+-		if err := json.Unmarshal(content, &role); err != nil {
+-			return nil, "unreadable"
+-		}
+-		if role.Role != "user" && role.Role != "model" {
+-			return nil, "raw_only"
+-		}
+-		messages = append(messages, content)
+-	}
+-	result, err := json.Marshal(messages)
+-	if err != nil {
+-		return nil, "unreadable"
+-	}
+-	return result, "available"
+-}
+-
+-func auditConversation(c *gin.Context, request dto.Request) (string, string) {
+-	if value := strings.TrimSpace(c.GetHeader("Session_id")); value != "" {
+-		return audit.ConversationID(value), "session_id"
+-	}
+-
+-	var value string
+-	switch req := request.(type) {
+-	case *dto.GeneralOpenAIRequest:
+-		value = req.PromptCacheKey
+-	case *dto.OpenAIResponsesRequest:
+-		if len(req.PromptCacheKey) > 0 {
+-			_ = common.Unmarshal(req.PromptCacheKey, &value)
+-		}
+-	}
+-	if strings.TrimSpace(value) == "" {
+-		return "", ""
+-	}
+-	return audit.ConversationID(value), "prompt_cache_key"
+-}
+-
+ var upgrader = websocket.Upgrader{
+ 	Subprotocols: []string{"realtime", "responses"}, // WS 握手支持的协议，如果有使用 Sec-WebSocket-Protocol，则必须在此声明对应的 Protocol
+ 	CheckOrigin: func(r *http.Request) bool {
+diff --git a/controller/relay_audit.go b/controller/relay_audit.go
+new file mode 100644
+index 0000000000000000000000000000000000000000..196e15cd7917f63a3b3ed0507c78feeed9004e1f
+--- /dev/null
++++ b/controller/relay_audit.go
+@@ -0,0 +1,280 @@
++package controller
++
++import (
++	"encoding/json"
++	"strings"
++	"time"
++
++	"github.com/QuantumNous/new-api/audit"
++	"github.com/QuantumNous/new-api/common"
++	"github.com/QuantumNous/new-api/constant"
++	relayconstant "github.com/QuantumNous/new-api/relay/constant"
++	"github.com/QuantumNous/new-api/relaykit/dto"
++	"github.com/QuantumNous/new-api/relaykit/types"
++	"github.com/gin-gonic/gin"
++)
++
++// body is an optional validated snapshot. WS must pass its normalized body:
++// middleware body storage may still contain the original response.create frame.
++// Capture before forwarding/retries; never mutate the relay DTO or consume its body.
++func enqueueRelayAudit(c *gin.Context, request dto.Request, format types.RelayFormat, originalModel string, isStream bool, body []byte) {
++	if !audit.EnabledForToken(c.GetString("token_name")) {
++		return
++	}
++	messages, status := auditMessages(c, request, format, relayconstant.Path2RelayMode(c.Request.URL.Path), body)
++	promptText := ""
++	if meta := request.GetTokenCountMeta(); meta != nil {
++		promptText = meta.CombineText
++	}
++	conversationID, source := auditConversation(c, request)
++	audit.EnqueueRequest(audit.RequestEvent{
++		RequestId:          c.GetString(common.RequestIdKey),
++		CreatedAt:          time.Now().UTC().Format(time.RFC3339Nano),
++		UserId:             common.GetContextKeyInt(c, constant.ContextKeyUserId),
++		Username:           c.GetString("username"),
++		TokenId:            common.GetContextKeyInt(c, constant.ContextKeyTokenId),
++		TokenName:          c.GetString("token_name"),
++		ModelName:          originalModel,
++		RequestPath:        c.Request.URL.Path,
++		RelayFormat:        string(format),
++		IsStream:           isStream,
++		PromptHash:         audit.HashText(promptText),
++		PromptPreview:      audit.PreviewText(promptText, 500),
++		PromptText:         promptText,
++		ConversationID:     conversationID,
++		ConversationSource: source,
++		UserDisplayName:    c.GetString("display_name"),
++		Messages:           messages,
++		MessagesStatus:     status,
++	})
++}
++
++func auditMessages(c *gin.Context, request dto.Request, relayFormat types.RelayFormat, relayMode int, body []byte) (json.RawMessage, string) {
++	switch relayFormat {
++	case types.RelayFormatClaude:
++	case types.RelayFormatOpenAI, types.RelayFormatOpenAIResponses, types.RelayFormatOpenAIResponsesCompaction, types.RelayFormatGemini:
++	default:
++		return nil, "raw_only"
++	}
++	if relayFormat == types.RelayFormatGemini {
++		if _, ok := request.(*dto.GeminiChatRequest); !ok {
++			return nil, "raw_only"
++		}
++	}
++	if body == nil {
++		storage, err := common.GetBodyStorage(c)
++		if err != nil {
++			return nil, "unreadable"
++		}
++		body, err = storage.Bytes()
++		if err != nil {
++			return nil, "unreadable"
++		}
++	}
++
++	if relayFormat == types.RelayFormatClaude {
++		return extractAnthropicMessages(request, body)
++	}
++	if relayFormat == types.RelayFormatGemini {
++		return extractGeminiMessages(request, body)
++	}
++	switch relayMode {
++	case relayconstant.RelayModeChatCompletions:
++		return extractChatMessages(request, body)
++	case relayconstant.RelayModeResponses, relayconstant.RelayModeResponsesCompact:
++		return extractResponsesMessages(request, body)
++	default:
++		return nil, "raw_only"
++	}
++}
++
++func extractChatMessages(request dto.Request, body []byte) (json.RawMessage, string) {
++	if _, ok := request.(*dto.GeneralOpenAIRequest); !ok {
++		return nil, "raw_only"
++	}
++	var envelope struct {
++		Messages json.RawMessage `json:"messages"`
++	}
++	if err := common.Unmarshal(body, &envelope); err != nil {
++		return nil, "unreadable"
++	}
++	if len(envelope.Messages) == 0 || string(envelope.Messages) == "null" {
++		return nil, "raw_only"
++	}
++	var messages []json.RawMessage
++	if err := common.Unmarshal(envelope.Messages, &messages); err != nil || len(messages) == 0 {
++		return nil, "raw_only"
++	}
++	return envelope.Messages, "available"
++}
++
++func extractResponsesMessages(request dto.Request, body []byte) (json.RawMessage, string) {
++	switch request.(type) {
++	case *dto.OpenAIResponsesRequest, *dto.OpenAIResponsesCompactionRequest:
++	default:
++		return nil, "raw_only"
++	}
++	var envelope struct {
++		Input json.RawMessage `json:"input"`
++	}
++	if err := common.Unmarshal(body, &envelope); err != nil {
++		return nil, "unreadable"
++	}
++	if len(envelope.Input) == 0 || string(envelope.Input) == "null" {
++		return nil, "raw_only"
++	}
++	var inputs []struct {
++		Role string `json:"role"`
++		Type string `json:"type"`
++	}
++	if err := common.Unmarshal(envelope.Input, &inputs); err != nil || len(inputs) == 0 {
++		return nil, "raw_only"
++	}
++	for _, input := range inputs {
++		if strings.TrimSpace(input.Role) != "" || input.Type == "function_call" || input.Type == "custom_tool_call" || input.Type == "reasoning" {
++			return envelope.Input, "available"
++		}
++	}
++	return nil, "raw_only"
++}
++
++func extractAnthropicMessages(request dto.Request, body []byte) (json.RawMessage, string) {
++	if _, ok := request.(*dto.ClaudeRequest); !ok {
++		return nil, "raw_only"
++	}
++	var envelope struct {
++		System   json.RawMessage `json:"system"`
++		Messages json.RawMessage `json:"messages"`
++	}
++	if err := common.Unmarshal(body, &envelope); err != nil {
++		return nil, "unreadable"
++	}
++
++	messages := make([]json.RawMessage, 0)
++	if len(envelope.System) > 0 && string(envelope.System) != "null" {
++		system, err := common.Marshal(struct {
++			Role    string          `json:"role"`
++			Content json.RawMessage `json:"content"`
++		}{Role: "system", Content: envelope.System})
++		if err != nil {
++			return nil, "unreadable"
++		}
++		messages = append(messages, system)
++	}
++	if len(envelope.Messages) == 0 || string(envelope.Messages) == "null" {
++		if len(messages) == 0 {
++			return nil, "raw_only"
++		}
++		result, err := common.Marshal(messages)
++		if err != nil {
++			return nil, "unreadable"
++		}
++		return result, "available"
++	}
++
++	var original []json.RawMessage
++	if err := common.Unmarshal(envelope.Messages, &original); err != nil {
++		return nil, "unreadable"
++	}
++	if len(original) == 0 {
++		return nil, "raw_only"
++	}
++	for _, message := range original {
++		var role struct {
++			Role string `json:"role"`
++		}
++		if err := common.Unmarshal(message, &role); err != nil {
++			return nil, "unreadable"
++		}
++		if role.Role != "user" && role.Role != "assistant" {
++			return nil, "raw_only"
++		}
++		messages = append(messages, message)
++	}
++	result, err := common.Marshal(messages)
++	if err != nil {
++		return nil, "unreadable"
++	}
++	return result, "available"
++}
++
++func extractGeminiMessages(request dto.Request, body []byte) (json.RawMessage, string) {
++	if _, ok := request.(*dto.GeminiChatRequest); !ok {
++		return nil, "raw_only"
++	}
++	var envelope struct {
++		SystemInstruction      json.RawMessage `json:"systemInstruction"`
++		SystemInstructionSnake json.RawMessage `json:"system_instruction"`
++		Contents               json.RawMessage `json:"contents"`
++	}
++	if err := common.Unmarshal(body, &envelope); err != nil {
++		return nil, "unreadable"
++	}
++
++	messages := make([]json.RawMessage, 0)
++	for _, instruction := range []json.RawMessage{envelope.SystemInstruction, envelope.SystemInstructionSnake} {
++		if len(instruction) == 0 || string(instruction) == "null" {
++			continue
++		}
++		system, err := common.Marshal(struct {
++			Role    string          `json:"role"`
++			Content json.RawMessage `json:"content"`
++		}{Role: "system", Content: instruction})
++		if err != nil {
++			return nil, "unreadable"
++		}
++		messages = append(messages, system)
++	}
++	if len(envelope.Contents) == 0 || string(envelope.Contents) == "null" {
++		if len(messages) == 0 {
++			return nil, "raw_only"
++		}
++		result, err := common.Marshal(messages)
++		if err != nil {
++			return nil, "unreadable"
++		}
++		return result, "available"
++	}
++
++	var contents []json.RawMessage
++	if err := common.Unmarshal(envelope.Contents, &contents); err != nil || len(contents) == 0 {
++		return nil, "raw_only"
++	}
++	for _, content := range contents {
++		var role struct {
++			Role string `json:"role"`
++		}
++		if err := common.Unmarshal(content, &role); err != nil {
++			return nil, "unreadable"
++		}
++		if role.Role != "user" && role.Role != "model" {
++			return nil, "raw_only"
++		}
++		messages = append(messages, content)
++	}
++	result, err := common.Marshal(messages)
++	if err != nil {
++		return nil, "unreadable"
++	}
++	return result, "available"
++}
++
++func auditConversation(c *gin.Context, request dto.Request) (string, string) {
++	if value := strings.TrimSpace(c.GetHeader("Session_id")); value != "" {
++		return audit.ConversationID(value), "session_id"
++	}
++
++	var value string
++	switch req := request.(type) {
++	case *dto.GeneralOpenAIRequest:
++		value = req.PromptCacheKey
++	case *dto.OpenAIResponsesRequest:
++		if len(req.PromptCacheKey) > 0 {
++			_ = common.Unmarshal(req.PromptCacheKey, &value)
++		}
++	}
++	if strings.TrimSpace(value) == "" {
++		return "", ""
++	}
++	return audit.ConversationID(value), "prompt_cache_key"
++}
+diff --git a/controller/relay_audit_integration_test.go b/controller/relay_audit_integration_test.go
+index 6b0e431415fa22da8fee672484bebf04dd886d8d..12a88180274e8f3a897c24e5bf20a628f410ec4c 100644
+--- a/controller/relay_audit_integration_test.go
++++ b/controller/relay_audit_integration_test.go
+@@ -9,12 +9,14 @@ import (
+ 	"os"
+ 	"os/exec"
+ 	"strings"
++	"sync/atomic"
+ 	"testing"
+ 	"time"
+ 
+ 	"github.com/QuantumNous/new-api/audit"
+ 	"github.com/QuantumNous/new-api/common"
+ 	hostconstant "github.com/QuantumNous/new-api/constant"
++	"github.com/QuantumNous/new-api/i18n"
+ 	"github.com/QuantumNous/new-api/model"
+ 	"github.com/QuantumNous/new-api/relaykit/types"
+ 	"github.com/QuantumNous/new-api/service"
+@@ -22,6 +24,7 @@ import (
+ 	"github.com/QuantumNous/new-api/setting/ratio_setting"
+ 	"github.com/gin-gonic/gin"
+ 	"github.com/glebarez/sqlite"
++	"github.com/gorilla/websocket"
+ 	"github.com/stretchr/testify/assert"
+ 	"github.com/stretchr/testify/require"
+ 	"gorm.io/gorm"
+@@ -70,6 +73,7 @@ func TestRelayAuditLifecycle(t *testing.T) {
+ 	if mode == "excluded" {
+ 		token = "excluded-token"
+ 	}
++	require.NoError(t, i18n.Init())
+ 	gin.SetMode(gin.TestMode)
+ 	hostconstant.CountToken = false
+ 	hostconstant.StreamingTimeout = 30
+@@ -199,3 +203,199 @@ func TestRelayAuditLifecycle(t *testing.T) {
+ 	assert.Equal(t, mode != "disabled", audit.EnabledForToken("audited-token"))
+ 	assert.Empty(t, received, "unexpected duplicate or excluded audit event; consumed %d", expected)
+ }
++
++// 真实 WS + 原有逐请求鉴权 + 异步 webhook，不能用直接调用采集函数替代。
++func TestResponsesWebSocketAuditLifecycle(t *testing.T) {
++	mode := os.Getenv("TEST_WS_AUDIT_MODE")
++	if mode == "" {
++		binary, err := os.Executable()
++		require.NoError(t, err)
++		for _, mode := range []string{"enabled", "disabled", "excluded", "receiver-error", "retry", "saturated"} {
++			t.Run(mode, func(t *testing.T) {
++				cmd := exec.Command(binary, "-test.run=^TestResponsesWebSocketAuditLifecycle$", "-test.timeout=30s")
++				cmd.Env = append(os.Environ(), "TEST_WS_AUDIT_MODE="+mode)
++				output, err := cmd.CombinedOutput()
++				require.NoError(t, err, "%s", output)
++			})
++		}
++		return
++	}
++	type delivery struct {
++		path string
++		body []byte
++	}
++	received := make(chan delivery, 32)
++	unblock := make(chan struct{})
++	receiver := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		body, err := io.ReadAll(r.Body)
++		if !assert.NoError(t, err) {
++			w.WriteHeader(400)
++			return
++		}
++		received <- delivery{r.URL.Path, body}
++		if mode == "saturated" {
++			<-unblock
++		}
++		if mode == "receiver-error" {
++			w.WriteHeader(503)
++		}
++	}))
++	defer receiver.Close()
++	defer close(unblock)
++	t.Setenv("AUDIT_ENABLED", fmt.Sprint(mode != "disabled"))
++	t.Setenv("AUDIT_ENDPOINT", receiver.URL)
++	t.Setenv("AUDIT_SECRET", "test-only-secret")
++	t.Setenv("AUDIT_TIMEOUT_MS", "1000")
++	if mode == "saturated" {
++		t.Setenv("AUDIT_QUEUE_SIZE", "1")
++		t.Setenv("AUDIT_TIMEOUT_MS", "20000")
++	}
++	t.Setenv("AUDIT_EXCLUDED_TOKEN_NAMES", "excluded-token")
++	fixture := newResponsesWSBillingTest(t, `tier("base", p * 2)`, func(ws *websocket.Conn, _ *http.Request) {
++		for index := 1; ; index++ {
++			if _, _, err := ws.ReadMessage(); err != nil {
++				return
++			}
++			terminal := fmt.Sprintf(`{"type":"response.completed","response":{"id":"resp_%d","status":"completed","model":"ws-billing","output":[],"usage":{"input_tokens":%d,"output_tokens":2,"total_tokens":%d}}}`, index, index+10, index+12)
++			if !assert.NoError(t, ws.WriteMessage(websocket.TextMessage, []byte(terminal))) {
++				return
++			}
++		}
++	})
++
++	var failedDials atomic.Int32
++	if mode == "retry" {
++		previousRetry := common.RetryTimes
++		common.RetryTimes = 1
++		defer func() { common.RetryTimes = previousRetry }()
++		badUpstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
++			failedDials.Add(1)
++			w.WriteHeader(http.StatusServiceUnavailable)
++		}))
++		defer badUpstream.Close()
++		badChannel := *fixture.channel
++		badChannel.Id = 0
++		badChannel.Priority = common.GetPointer(int64(100))
++		badChannel.BaseURL = &badUpstream.URL
++		require.NoError(t, model.DB.Create(&badChannel).Error)
++		require.NoError(t, model.DB.Create(&model.Ability{ChannelId: badChannel.Id, Model: "ws-billing", Group: "default", Enabled: true, Priority: badChannel.Priority}).Error)
++		defer func() {
++			require.NoError(t, model.DB.Where("channel_id = ?", badChannel.Id).Delete(&model.Ability{}).Error)
++			require.NoError(t, model.DB.Delete(&badChannel).Error)
++		}()
++	}
++	name := "audited-token"
++	if mode == "excluded" {
++		name = "excluded-token"
++	}
++	require.NoError(t, model.DB.Model(fixture.token).Update("name", name).Error)
++	require.NoError(t, model.InvalidateUserTokensCache(fixture.user.Id))
++	payloads := []string{
++		`{"type":"response.create","model":"ws-billing","prompt_cache_key":"ws-test-session","input":[{"role":"user","content":"ws-first-marker"}]}`,
++		`{"type":"response.create","response":{"model":"ws-billing","prompt_cache_key":"ws-test-session","previous_response_id":"resp_1","input":[{"role":"developer","content":"ws-second-marker"}]}}`,
++		`{"type":"response.create","model":"ws-billing","input":"ws-raw-marker"}`,
++	}
++	for _, payload := range payloads {
++		require.NoError(t, fixture.client.WriteMessage(websocket.TextMessage, []byte(payload)))
++		require.NoError(t, fixture.client.SetReadDeadline(time.Now().Add(3*time.Second)))
++		_, body, err := fixture.client.ReadMessage()
++		require.NoError(t, err)
++		assert.Contains(t, string(body), `"response.completed"`)
++	}
++
++	// 格式和连接模型约束失败都不能留下正常请求内容。
++	for _, invalid := range []string{
++		`{"type":"response.create","input":"invalid-missing-model"}`,
++		`{"type":"response.create","model":"other-model","input":"invalid-model-switch"}`,
++		`{"type":"response.create","model":123,"input":"invalid-model-type"}`,
++	} {
++		require.NoError(t, fixture.client.WriteMessage(websocket.TextMessage, []byte(invalid)))
++		require.NoError(t, fixture.client.SetReadDeadline(time.Now().Add(3*time.Second)))
++		_, body, err := fixture.client.ReadMessage()
++		require.NoError(t, err)
++		assert.Contains(t, string(body), `"error"`)
++	}
++	require.NoError(t, model.DB.Model(fixture.token).Update("status", common.TokenStatusDisabled).Error)
++	require.NoError(t, model.InvalidateUserTokensCache(fixture.user.Id))
++	require.NoError(t, fixture.client.WriteMessage(websocket.TextMessage, []byte(payloads[0])))
++	_, rejected, err := fixture.client.ReadMessage()
++	require.NoError(t, err)
++	assert.Contains(t, string(rejected), `"error"`)
++	fixture.closeAndWait(t)
++	if mode == "saturated" {
++		// 三次中继已终止，但接收端仍被锁住，容量 1 的队列已丢弃多余事件。
++		select {
++		case event := <-received:
++			assert.True(t, strings.HasSuffix(event.path, "/request"))
++		case <-time.After(3 * time.Second):
++			t.Fatal("sender did not reach blocked receiver")
++		}
++		return
++	}
++	if mode == "disabled" {
++		require.Empty(t, received)
++		return
++	}
++	// sender 单 worker FIFO：屏障确保检查覆盖所有已入队事件，而不是任意 sleep。
++	audit.EnqueueUsage(audit.UsageEvent{RequestId: "ws-audit-barrier", TokenName: "audited-token"})
++	requests := map[string]audit.RequestEvent{}
++	usages := map[string]audit.UsageEvent{}
++	timeout := time.After(3 * time.Second)
++collect:
++	for {
++		select {
++		case event := <-received:
++			if strings.HasSuffix(event.path, "/request") {
++				var request audit.RequestEvent
++				require.NoError(t, common.Unmarshal(event.body, &request))
++				assert.NotContains(t, requests, request.RequestId, "request must not be enqueued twice")
++				requests[request.RequestId] = request
++			} else {
++				var usage audit.UsageEvent
++				require.NoError(t, common.Unmarshal(event.body, &usage))
++				if usage.RequestId == "ws-audit-barrier" {
++					break collect
++				}
++				assert.NotContains(t, usages, usage.RequestId)
++				usages[usage.RequestId] = usage
++			}
++		case <-timeout:
++			t.Fatal("audit delivery timed out")
++		}
++	}
++	if mode == "excluded" {
++		require.Empty(t, requests)
++		require.Empty(t, usages)
++		return
++	}
++	require.Len(t, requests, 3, "accepted WS messages must have request evidence, not only usage")
++	require.Len(t, usages, 3)
++	for index, marker := range []string{"ws-first-marker", "ws-second-marker", "ws-raw-marker"} {
++		id := fmt.Sprintf("responses-ws-billing-ws-%d", index)
++		event := requests[id]
++		assert.LessOrEqual(t, len(id), 96)
++		assert.Equal(t, fixture.user.Id, event.UserId)
++		assert.Equal(t, fixture.token.Id, event.TokenId)
++		assert.Equal(t, "ws-billing", event.ModelName, "capture before channel mapping")
++		assert.Equal(t, "/v1/responses", event.RequestPath)
++		assert.Equal(t, string(types.RelayFormatOpenAIResponses), event.RelayFormat)
++		assert.True(t, event.IsStream)
++		assert.Equal(t, index+11, usages[id].PromptTokens)
++		if index < 2 {
++			assert.Equal(t, "available", event.MessagesStatus)
++			assert.Contains(t, string(event.Messages), marker)
++			assert.Equal(t, audit.ConversationID("ws-test-session"), event.ConversationID)
++			assert.Equal(t, "prompt_cache_key", event.ConversationSource)
++		} else {
++			assert.Equal(t, "raw_only", event.MessagesStatus)
++			assert.Empty(t, event.Messages)
++			assert.Contains(t, event.PromptText, marker)
++			assert.Empty(t, event.ConversationID)
++		}
++	}
++	assert.NotContains(t, string(requests["responses-ws-billing-ws-1"].Messages), "ws-first-marker")
++	if mode == "retry" {
++		assert.EqualValues(t, 1, failedDials.Load())
++	}
++	require.Empty(t, received, "receiver errors must not trigger sender retries")
++}
+diff --git a/controller/relay_audit_test.go b/controller/relay_audit_test.go
+index b0a52e4f3b955f794cd40b269ba31c6131d782b7..96eb16519ac9c5a0020fbed337b3207553e4af1e 100644
+--- a/controller/relay_audit_test.go
++++ b/controller/relay_audit_test.go
+@@ -23,7 +23,7 @@ func TestExtractChatMessagesPreservesOriginalRoleStructure(t *testing.T) {
+ 	var expected struct {
+ 		Messages json.RawMessage `json:"messages"`
+ 	}
+-	require.NoError(t, json.Unmarshal(body, &expected))
++	require.NoError(t, common.Unmarshal(body, &expected))
+ 	require.JSONEq(t, string(expected.Messages), string(messages))
+ }
+ 
+@@ -45,7 +45,7 @@ func TestExtractResponsesMessagesPreservesOriginalRoleStructure(t *testing.T) {
+ 	var expected struct {
+ 		Input json.RawMessage `json:"input"`
+ 	}
+-	require.NoError(t, json.Unmarshal(body, &expected))
++	require.NoError(t, common.Unmarshal(body, &expected))
+ 	require.JSONEq(t, string(expected.Input), string(messages))
+ }
+ 
+@@ -68,10 +68,10 @@ func TestExtractAnthropicMessagesPreservesSystemAndRoleStructure(t *testing.T) {
+ 		System   json.RawMessage   `json:"system"`
+ 		Messages []json.RawMessage `json:"messages"`
+ 	}
+-	require.NoError(t, json.Unmarshal(body, &expected))
+-	system, err := json.Marshal(map[string]json.RawMessage{"role": json.RawMessage(`"system"`), "content": expected.System})
++	require.NoError(t, common.Unmarshal(body, &expected))
++	system, err := common.Marshal(map[string]json.RawMessage{"role": json.RawMessage(`"system"`), "content": expected.System})
+ 	require.NoError(t, err)
+-	expectedMessages, err := json.Marshal(append([]json.RawMessage{system}, expected.Messages...))
++	expectedMessages, err := common.Marshal(append([]json.RawMessage{system}, expected.Messages...))
+ 	require.NoError(t, err)
+ 	require.JSONEq(t, string(expectedMessages), string(messages))
+ }
+@@ -91,10 +91,10 @@ func TestExtractGeminiMessagesPreservesSystemAndRoleStructure(t *testing.T) {
+ 		SystemInstruction json.RawMessage   `json:"systemInstruction"`
+ 		Contents          []json.RawMessage `json:"contents"`
+ 	}
+-	require.NoError(t, json.Unmarshal(body, &expected))
+-	system, err := json.Marshal(map[string]json.RawMessage{"role": json.RawMessage(`"system"`), "content": expected.SystemInstruction})
++	require.NoError(t, common.Unmarshal(body, &expected))
++	system, err := common.Marshal(map[string]json.RawMessage{"role": json.RawMessage(`"system"`), "content": expected.SystemInstruction})
+ 	require.NoError(t, err)
+-	expectedMessages, err := json.Marshal(append([]json.RawMessage{system}, expected.Contents...))
++	expectedMessages, err := common.Marshal(append([]json.RawMessage{system}, expected.Contents...))
+ 	require.NoError(t, err)
+ 	require.JSONEq(t, string(expectedMessages), string(messages))
+ }
+@@ -129,10 +129,22 @@ func TestAuditMessagesPreservesSupportedProtocolMatrix(t *testing.T) {
+ 			context.Request = httptest.NewRequest(http.MethodPost, "/", strings.NewReader(test.body))
+ 			defer common.CleanupBodyStorage(context)
+ 
+-			messages, status := auditMessages(context, test.request, test.relayFormat, test.relayMode)
++			messages, status := auditMessages(context, test.request, test.relayFormat, test.relayMode, nil)
+ 
+ 			require.Equal(t, "available", status)
+ 			require.NotEmpty(t, messages)
+ 		})
+ 	}
+ }
++
++func TestExtractResponsesMessagesPreservesTypedEvidence(t *testing.T) {
++	for _, body := range []string{
++		`{"input":[{"type":"function_call","name":"lookup","arguments":"{}"}]}`,
++		`{"input":[{"type":"custom_tool_call","name":"lookup","input":"query"}]}`,
++		`{"input":[{"type":"reasoning","summary":[{"type":"summary_text","text":"reason"}]}]}`,
++	} {
++		messages, status := extractResponsesMessages(&dto.OpenAIResponsesRequest{}, []byte(body))
++		require.Equal(t, "available", status)
++		require.NotEmpty(t, messages)
++	}
++}
+diff --git a/controller/responses_websocket.go b/controller/responses_websocket.go
+index 9fd772286e39d3d870fffbe007c277a082cab5cb..f9458e67020a28db58197d995a2e4ad6b47121fc 100644
+--- a/controller/responses_websocket.go
++++ b/controller/responses_websocket.go
+@@ -15,6 +15,7 @@ import (
+ 	"github.com/QuantumNous/new-api/middleware"
+ 	"github.com/QuantumNous/new-api/relay"
+ 	"github.com/QuantumNous/new-api/relay/helper"
++	"github.com/QuantumNous/new-api/relaykit/dto"
+ 	"github.com/QuantumNous/new-api/relaykit/types"
+ 	"github.com/gin-gonic/gin"
+ )
+@@ -120,7 +121,9 @@ func ResponsesWebSocket(c *gin.Context) {
+ 	}
+ 	defer ws.Close()
+ 
+-	if apiError := relay.ResponsesWebSocketHelper(c, ws, runner); apiError != nil {
++	if apiError := relay.ResponsesWebSocketHelper(c, ws, runner, func(ctx *gin.Context, request *dto.OpenAIResponsesRequest, body []byte) {
++		enqueueRelayAudit(ctx, request, types.RelayFormatOpenAIResponses, request.Model, true, body)
++	}); apiError != nil {
+ 		logger.LogError(c, common.LogText("responses websocket relay error: %s", common.LocalLogPreview(apiError.Error())))
+ 		apiError.SetMessage(common.MessageWithRequestId(apiError.Error(), requestID))
+ 		helper.WssError(c, ws, apiError.ToOpenAIError())
+diff --git a/relay/responses_websocket.go b/relay/responses_websocket.go
+index fdb7fba179e7c9f833b7fc56de564cb1f0bb4de0..1bcdccbfaaa9dbb07eb2df69c82dae4bb9b94e8c 100644
+--- a/relay/responses_websocket.go
++++ b/relay/responses_websocket.go
+@@ -39,6 +39,10 @@ const responsesWSWriteTimeout = 30 * time.Second
+ // middleware around one complete request, without a second HTTP connection.
+ type ResponsesWSRequestRunner func(*http.Request, string, func(*gin.Context) *types.NewAPIError) *types.NewAPIError
+ 
++// ResponsesWSRequestObserver sees each authenticated, admitted and normalized
++// create once, before routing and retries. It must not mutate the request.
++type ResponsesWSRequestObserver func(*gin.Context, *dto.OpenAIResponsesRequest, []byte)
++
+ type responsesWSCreateEvent struct {
+ 	Type     string            `json:"type"`
+ 	EventID  string            `json:"event_id,omitempty"`
+@@ -93,6 +97,7 @@ type responsesWSSession struct {
+ 	cancel         context.CancelFunc
+ 	client         *websocket.Conn
+ 	runner         ResponsesWSRequestRunner
++	observe        ResponsesWSRequestObserver
+ 	request        *http.Request
+ 	requestID      string
+ 	nextEventIndex int
+@@ -119,9 +124,9 @@ type responsesWSSession struct {
+ 	lockedRoute     dto.AdvancedCustomRoute
+ }
+ 
+-func ResponsesWebSocketHelper(c *gin.Context, client *websocket.Conn, runner ResponsesWSRequestRunner) *types.NewAPIError {
++func ResponsesWebSocketHelper(c *gin.Context, client *websocket.Conn, runner ResponsesWSRequestRunner, observe ResponsesWSRequestObserver) *types.NewAPIError {
+ 	ctx, cancel := context.WithCancel(c.Request.Context())
+-	s := &responsesWSSession{ctx: ctx, cancel: cancel, client: client, runner: runner,
++	s := &responsesWSSession{ctx: ctx, cancel: cancel, client: client, runner: runner, observe: observe,
+ 		request: c.Request.Clone(ctx), requestID: c.GetString(common.RequestIdKey)}
+ 	if s.requestID == "" {
+ 		s.requestID = common.NewRequestId()
+@@ -262,6 +267,11 @@ func (s *responsesWSSession) runCall(c *gin.Context, state *responsesWSCallState
+ 	if apiErr = checkResponsesWSModelAccess(c, modelName); apiErr != nil {
+ 		return apiErr
+ 	}
++	// Model presence, connection pinning and token model access are admission
++	// checks too. Observe only after all of them, but before channel selection.
++	if s.observe != nil {
++		s.observe(c, &create.Request, create.Body)
++	}
+ 	common.SetContextKey(c, appconstant.ContextKeyOriginalModel, modelName)
+ 	common.SetContextKey(c, appconstant.ContextKeyRequestStartTime, time.Now())
+ 	service.GetChannelConstraints(c).AddFilter(appdto.ChannelFilter{Kind: appdto.FilterRequestPath, RequestPath: c.Request.URL.Path})
+diff --git a/relay/responses_websocket_test.go b/relay/responses_websocket_test.go
+index 7e2cf2129df7109b7d4af8669d8e5f03923ab962..2903c17460a0fc0a1d0912db2fee80cf354268e5 100644
+--- a/relay/responses_websocket_test.go
++++ b/relay/responses_websocket_test.go
+@@ -545,7 +545,7 @@ func TestResponsesWSMessageSizeLimit(t *testing.T) {
+ 		ResponsesWebSocketHelper(c, server, func(*http.Request, string, func(*gin.Context) *types.NewAPIError) *types.NewAPIError {
+ 			admitted.Store(true)
+ 			return nil
+-		})
++		}, nil)
+ 	}()
+ 	_ = client.WriteMessage(websocket.TextMessage, []byte(strings.Repeat("x", (1<<20)+1)))
+ 	require.NoError(t, client.SetReadDeadline(time.Now().Add(5*time.Second)))

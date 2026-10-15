@@ -1,4 +1,4 @@
-From 08b6f7593c2c27ccba0372bd4eb3775d01b8b3b7 Mon Sep 17 00:00:00 2001
+From 310fc7ae8fddda70590f750bb19f4cc1187dc2c5 Mon Sep 17 00:00:00 2001
 From: sommio <sommio.mail@gmail.com>
 Date: Tue, 1 Sep 2026 18:31:12 +0800
 Subject: [PATCH] =?UTF-8?q?feat(audit):=20=E4=BF=9D=E7=95=99=20Anthropic?=
@@ -13,10 +13,10 @@ Content-Transfer-Encoding: 8bit
  2 files changed, 94 insertions(+), 2 deletions(-)
 
 diff --git a/controller/relay.go b/controller/relay.go
-index 31859fb370720dda3abdc2b1288641010b52a14e..eda5afd8d1cb176adc3405dd9ab9d4f7a724c33e 100644
+index a12302d1c9b51ec1ab31f90828dd026bb948a0c0..8f53abcde6ed8156a8213ae890a7e72446105e54 100644
 --- a/controller/relay.go
 +++ b/controller/relay.go
-@@ -130,7 +130,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
+@@ -131,7 +131,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
  	var structuredMessages json.RawMessage
  	messagesStatus := "raw_only"
  	if needAuditPrompt {
@@ -25,7 +25,7 @@ index 31859fb370720dda3abdc2b1288641010b52a14e..eda5afd8d1cb176adc3405dd9ab9d4f7
  	}
  	// Only build the full audit prompt when this token is audited.
  	var meta *types.TokenCountMeta
-@@ -291,7 +291,13 @@ func CountClaudeTokens(c *gin.Context) {
+@@ -292,7 +292,13 @@ func CountClaudeTokens(c *gin.Context) {
  	c.JSON(http.StatusOK, gin.H{"input_tokens": inputTokens})
  }
  
@@ -40,7 +40,7 @@ index 31859fb370720dda3abdc2b1288641010b52a14e..eda5afd8d1cb176adc3405dd9ab9d4f7
  	storage, err := common.GetBodyStorage(c)
  	if err != nil {
  		return nil, "unreadable"
-@@ -300,6 +306,9 @@ func auditMessages(c *gin.Context, request dto.Request, relayMode int) (json.Raw
+@@ -301,6 +307,9 @@ func auditMessages(c *gin.Context, request dto.Request, relayMode int) (json.Raw
  	if err != nil {
  		return nil, "unreadable"
  	}
@@ -50,7 +50,7 @@ index 31859fb370720dda3abdc2b1288641010b52a14e..eda5afd8d1cb176adc3405dd9ab9d4f7
  	switch relayMode {
  	case relayconstant.RelayModeChatCompletions:
  		return extractChatMessages(request, body)
-@@ -360,6 +369,66 @@ func extractResponsesMessages(request dto.Request, body []byte) (json.RawMessage
+@@ -361,6 +370,66 @@ func extractResponsesMessages(request dto.Request, body []byte) (json.RawMessage
  	return nil, "raw_only"
  }
  

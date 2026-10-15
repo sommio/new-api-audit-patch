@@ -1,4 +1,4 @@
-From 8392b3d8eb36268480dd8b65c14057b57e197a68 Mon Sep 17 00:00:00 2001
+From 498d43a80f412f865f93019abdf0580d9c9e052f Mon Sep 17 00:00:00 2001
 From: sommio <sommio.mail@gmail.com>
 Date: Tue, 1 Sep 2026 18:23:35 +0800
 Subject: [PATCH] =?UTF-8?q?feat(audit):=20=E4=BF=9D=E7=95=99=20Responses?=
@@ -13,10 +13,10 @@ Content-Transfer-Encoding: 8bit
  2 files changed, 57 insertions(+), 4 deletions(-)
 
 diff --git a/controller/relay.go b/controller/relay.go
-index 424ea9f37519992d13220aeb5b00b1dfd94dc116..31859fb370720dda3abdc2b1288641010b52a14e 100644
+index 2d5c7162de01a519c9ac5fc176ac0e1e91134f03..a12302d1c9b51ec1ab31f90828dd026bb948a0c0 100644
 --- a/controller/relay.go
 +++ b/controller/relay.go
-@@ -292,9 +292,6 @@ func CountClaudeTokens(c *gin.Context) {
+@@ -293,9 +293,6 @@ func CountClaudeTokens(c *gin.Context) {
  }
  
  func auditMessages(c *gin.Context, request dto.Request, relayMode int) (json.RawMessage, string) {
@@ -26,7 +26,7 @@ index 424ea9f37519992d13220aeb5b00b1dfd94dc116..31859fb370720dda3abdc2b128864101
  	storage, err := common.GetBodyStorage(c)
  	if err != nil {
  		return nil, "unreadable"
-@@ -303,7 +300,14 @@ func auditMessages(c *gin.Context, request dto.Request, relayMode int) (json.Raw
+@@ -304,7 +301,14 @@ func auditMessages(c *gin.Context, request dto.Request, relayMode int) (json.Raw
  	if err != nil {
  		return nil, "unreadable"
  	}
@@ -42,7 +42,7 @@ index 424ea9f37519992d13220aeb5b00b1dfd94dc116..31859fb370720dda3abdc2b128864101
  }
  
  func extractChatMessages(request dto.Request, body []byte) (json.RawMessage, string) {
-@@ -329,6 +333,33 @@ func extractChatMessages(request dto.Request, body []byte) (json.RawMessage, str
+@@ -330,6 +334,33 @@ func extractChatMessages(request dto.Request, body []byte) (json.RawMessage, str
  	return envelope.Messages, "available"
  }
  

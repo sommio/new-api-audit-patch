@@ -1,4 +1,4 @@
-From e1d00b77dc5e062639c2e84641d7e012704e9d2f Mon Sep 17 00:00:00 2001
+From bc65d61a6207a8d9800e86cd69718671d35cc89e Mon Sep 17 00:00:00 2001
 From: sommio <sommio.mail@gmail.com>
 Date: Wed, 2 Sep 2026 11:04:50 +0800
 Subject: [PATCH] =?UTF-8?q?fix(audit):=20=E4=BF=AE=E5=A4=8D=20Responses=20?=
@@ -14,10 +14,10 @@ Content-Transfer-Encoding: 8bit
  2 files changed, 39 insertions(+), 2 deletions(-)
 
 diff --git a/controller/relay.go b/controller/relay.go
-index 15a21f650a5a7c0d6ffce68c5fe9c4d94d2c6728..dd3bcdf3e0b25bd9fbdf37eff2473ac9bdf7d865 100644
+index 97a99dbcce37178f0d4558e813cc7e78d4826fc6..57955d333edb43402233924b48977fc06dee997a 100644
 --- a/controller/relay.go
 +++ b/controller/relay.go
-@@ -294,7 +294,7 @@ func CountClaudeTokens(c *gin.Context) {
+@@ -295,7 +295,7 @@ func CountClaudeTokens(c *gin.Context) {
  func auditMessages(c *gin.Context, request dto.Request, relayFormat types.RelayFormat, relayMode int) (json.RawMessage, string) {
  	switch relayFormat {
  	case types.RelayFormatClaude:
@@ -26,7 +26,7 @@ index 15a21f650a5a7c0d6ffce68c5fe9c4d94d2c6728..dd3bcdf3e0b25bd9fbdf37eff2473ac9
  	default:
  		return nil, "raw_only"
  	}
-@@ -351,7 +351,9 @@ func extractChatMessages(request dto.Request, body []byte) (json.RawMessage, str
+@@ -352,7 +352,9 @@ func extractChatMessages(request dto.Request, body []byte) (json.RawMessage, str
  }
  
  func extractResponsesMessages(request dto.Request, body []byte) (json.RawMessage, string) {

@@ -1,4 +1,4 @@
-From 466985520b29649ae4fe2379f58c4ada726cf884 Mon Sep 17 00:00:00 2001
+From ff3ccad2ef51be24229b39a7266fe224bd74bdf6 Mon Sep 17 00:00:00 2001
 From: ck_235 <ck_235@sina.com>
 Date: Tue, 2 Jun 2026 22:42:43 +0800
 Subject: [PATCH] feat: add token audit hooks
@@ -241,7 +241,7 @@ index 0000000000000000000000000000000000000000..7fc949f06c1824781ec336ceb05c9939
 +	return result
 +}
 diff --git a/controller/relay.go b/controller/relay.go
-index 21c91381906c5e2fb0c33f5fd6ab8eeb07518f39..9889fd15235fa3b48c45d04047b59c9bc2c798d8 100644
+index 31fd128b27b33c9f36c007f9dd1ab30c46eb9835..108f1ef58f13f2ea7c76463c5d5b89d1aeadb2ff 100644
 --- a/controller/relay.go
 +++ b/controller/relay.go
 @@ -9,6 +9,7 @@ import (
@@ -252,7 +252,7 @@ index 21c91381906c5e2fb0c33f5fd6ab8eeb07518f39..9889fd15235fa3b48c45d04047b59c9b
  	"github.com/QuantumNous/new-api/common"
  	"github.com/QuantumNous/new-api/constant"
  	taskdto "github.com/QuantumNous/new-api/dto"
-@@ -124,6 +125,31 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
+@@ -125,6 +126,31 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
  		return
  	}
  
@@ -285,10 +285,10 @@ index 21c91381906c5e2fb0c33f5fd6ab8eeb07518f39..9889fd15235fa3b48c45d04047b59c9b
  		recovered := recover()
  		resultErr := newAPIError
 diff --git a/model/log.go b/model/log.go
-index a56d26e428ef6c1e6743e76ddde7bd8dbcb6978b..170880561b6449a48d6bccf0651088b7aeab562b 100644
+index 3307fde1759cb69f79547e01ec70a700e308c7b9..2effba5dbcd6a52c0a5f7a7ebdc4c5e6a0fd46c3 100644
 --- a/model/log.go
 +++ b/model/log.go
-@@ -7,6 +7,7 @@ import (
+@@ -5,6 +5,7 @@ import (
  	"strings"
  	"time"
  
@@ -303,16 +303,16 @@ index a56d26e428ef6c1e6743e76ddde7bd8dbcb6978b..170880561b6449a48d6bccf0651088b7
 +		enqueueAuditUsage(c, userId, params)
  		return
  	}
- 	logger.LogInfo(c, fmt.Sprintf("record consume log: userId=%d, params=%s", userId, common.GetJsonString(params)))
-@@ -383,6 +385,7 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
+ 	logger.LogInfo(c, common.LogText("record consume log: userId=%d, params=%s", userId, common.GetJsonString(params)))
+@@ -385,6 +387,7 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
  	if err != nil {
- 		logger.LogError(c, "failed to record log: "+err.Error())
+ 		logger.LogError(c, common.LogText("failed to record log: %s", err.Error()))
  	}
 +	enqueueAuditUsage(c, userId, params)
  	if common.DataExportEnabled {
  		LogQuotaData(QuotaDataLogParams{
  			UserID:    userId,
-@@ -399,6 +402,26 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
+@@ -401,6 +404,26 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
  	}
  }
  

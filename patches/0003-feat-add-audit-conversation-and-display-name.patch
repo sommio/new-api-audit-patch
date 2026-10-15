@@ -1,4 +1,4 @@
-From a319e0cc62fcc911b0b1070b4bbe7317fef69e34 Mon Sep 17 00:00:00 2001
+From 9bd27fa01f6fa6ff0a18ac5e4f23b82badf340ad Mon Sep 17 00:00:00 2001
 From: Audit Patch Bot <audit-patch@example.invalid>
 Date: Wed, 26 Aug 2026 16:17:38 +0800
 Subject: [PATCH] feat: add audit conversation and display name
@@ -105,10 +105,10 @@ index 68c77bc4ef294369fe14edf2531d294c6a0d251e..a6081a84e119ad8acbd685f96fb53684
 +	require.NotEqual(t, first, ConversationID("sess-sensitive-value"))
 +}
 diff --git a/controller/relay.go b/controller/relay.go
-index 9889fd15235fa3b48c45d04047b59c9bc2c798d8..f80442d3c8900d8e20c71a7b14d62c69d93e630e 100644
+index 108f1ef58f13f2ea7c76463c5d5b89d1aeadb2ff..367918f0f58daf4b5dbd1ad7194d3ddf064063df 100644
 --- a/controller/relay.go
 +++ b/controller/relay.go
-@@ -133,20 +133,24 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
+@@ -134,20 +134,24 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
  
  	if needAuditPrompt && meta != nil {
  		promptText := meta.CombineText
@@ -146,7 +146,7 @@ index 9889fd15235fa3b48c45d04047b59c9bc2c798d8..f80442d3c8900d8e20c71a7b14d62c69
  		})
  	}
  
-@@ -278,6 +282,26 @@ func CountClaudeTokens(c *gin.Context) {
+@@ -279,6 +283,26 @@ func CountClaudeTokens(c *gin.Context) {
  	c.JSON(http.StatusOK, gin.H{"input_tokens": inputTokens})
  }
  
@@ -174,7 +174,7 @@ index 9889fd15235fa3b48c45d04047b59c9bc2c798d8..f80442d3c8900d8e20c71a7b14d62c69
  	Subprotocols: []string{"realtime", "responses"}, // WS 握手支持的协议，如果有使用 Sec-WebSocket-Protocol，则必须在此声明对应的 Protocol
  	CheckOrigin: func(r *http.Request) bool {
 diff --git a/model/user.go b/model/user.go
-index 9f1e8564c833eebac2bffbc6a28d29a67825f3e7..17af629d69ff48ce98c7425302fe6adfcd2d8776 100644
+index bb83bdb8251e168cd100dc3f787efbc336fc6c38..74c8d1ec56957de72d5341e0d5968620f9857c57 100644
 --- a/model/user.go
 +++ b/model/user.go
 @@ -122,6 +122,7 @@ func (user *User) ToBaseUser() *UserBase {
@@ -186,7 +186,7 @@ index 9f1e8564c833eebac2bffbc6a28d29a67825f3e7..17af629d69ff48ce98c7425302fe6adf
  		Email:       user.Email,
  		AuthVersion: user.AuthVersion,
 diff --git a/model/user_cache.go b/model/user_cache.go
-index 2dc6219dd60929757a1be948897db8ae44bfaea4..152ec93cee7d946f901c5a623bbf3a9193abbca7 100644
+index e488818168c75b2702ac0fde9638b1c7ca2ba69c..53316284d4892d1361a6674db27b269922c80be8 100644
 --- a/model/user_cache.go
 +++ b/model/user_cache.go
 @@ -11,7 +11,7 @@ import (

@@ -59,15 +59,23 @@ services:
 - 角色保留的请求证据覆盖 Chat Completions、Responses（包括 `/v1/responses/compact`）、Anthropic Messages 和 Gemini GenerateContent。没有明确角色消息的端点保持 `raw_only`；详见 [webhook 契约](webhook.md)。
 - 无 `request_id` 的事件直接丢弃。
 
-**覆盖限制：**上游新增的 Responses WebSocket（`GET /v1/responses`）尚未接入请求审计，不生成 request／角色消息事件；结算时可能仅有 usage 事件。这不是 `raw_only` 降级。渠道选项 `responses_websocket_enabled` 默认是 `false`；依赖完整请求审计的部署必须保持关闭。四类协议的角色消息支持指 HTTP 请求（含 SSE 响应）。
+**Responses WebSocket：**`GET /v1/responses` 的每条通过逐请求鉴权、限流和格式校验的 `response.create`，在转发前独立采集一次 request event。顶层和嵌套 `response` 格式共用 HTTP 审计入口；`request_id` 沿用逐消息 ID（不超过接收端的 96 字符限制），`request_path=/v1/responses`、`relay_format=openai_responses`、`is_stream=true`。同连接多次请求不会合并，渠道重试不会重复采集；存在实际结算时 usage 使用相同 ID，无结算不制造 usage。取消帧、非法消息、鉴权失败和并发拒绝不生成正常请求记录；已接纳请求在取消、断连或上游失败后保留已采集证据。
+
+只保存客户端本次实际提交的输入；`previous_response_id` 引用的服务器历史不恢复、不猜测，响应侧新生成内容不另行录制。角色数组保持顺序，字符串 `input` 保持 `messages_status=raw_only`，不补造角色。会话关联优先使用 `Session_id`，其次使用 `prompt_cache_key`，均由 HMAC 派生；没有信号则不造会话 ID。接收端继续裁剪工具输出/结果、图片 base64 等机器载荷，保留允许角色及工具调用的 `name`/`arguments`；员工 `audit_enabled=false` 时仅保留请求记录，不留存内容，新员工默认关闭。
+
+Responses 的 `function_call`、`custom_tool_call`、`reasoning` 类型项即使没有 `role` 也可作为结构化证据；工具输出单独出现时不补造角色。超大 request event 只压缩 `prompt_text`；若 `messages` 本身仍超限，整条 request event 丢弃，之后可能仅留下 usage 记录。
+
+配套 Token Audit 接收端对新到达的 `messages_status=available` 事件不再保存明文 `prompt_preview`，防止原始扁平文本绕过角色裁剪；即使角色数组被全部裁空也如此。`raw_only` 的兼容预览行为不变；历史 preview 不自动清理。本次无需 schema 迁移，但隐私修复要求同时升级审计接收端。
+
+渠道选项 `responses_websocket_enabled` 仍默认 `false`，使用含此补丁的已验证镜像后再按需开启。HTTP 四协议和 SSE 支持不变；这不是所有 WebSocket 协议的覆盖承诺，`/v1/realtime` 不在本次新增范围内。网关 `AUDIT_ENABLED`、excluded token 和现有单 worker 内存队列仍生效：at-most-once、不重试、不落盘；队列满、超大事件无法压缩、接收端错误或超时可能丢失，不保证零丢失，也不阻断转发。
 
 ## 源码方式使用
 
-补丁队列基于上游提交 `2035a82a`（见 `UPSTREAM_BASE`），按序应用：
+补丁队列基于上游提交 `633b4c5b`（见 `UPSTREAM_BASE`），按序应用：
 
 ```bash
 git clone https://github.com/QuantumNous/new-api.git upstream
-cd upstream && git checkout 2035a82a
+cd upstream && git checkout 633b4c5b
 git am --3way /path/to/patches/*.patch
 ```
 

@@ -1,4 +1,4 @@
-From eeb89c4eede9f2887093324d461ea59d8523b24d Mon Sep 17 00:00:00 2001
+From 117f17a64792117d52a2c20b53090a6a6faeecd2 Mon Sep 17 00:00:00 2001
 From: sommio <sommio.mail@gmail.com>
 Date: Thu, 8 Oct 2026 10:54:12 +0800
 Subject: [PATCH] =?UTF-8?q?fix(audit):=20=E9=80=82=E9=85=8D=E4=B8=AD?=
@@ -15,10 +15,10 @@ Content-Transfer-Encoding: 8bit
  create mode 100644 controller/relay_audit_integration_test.go
 
 diff --git a/controller/relay.go b/controller/relay.go
-index dd3bcdf3e0b25bd9fbdf37eff2473ac9bdf7d865..ea2684fe4c0943b174a7eb62462cbe8f1ded87e2 100644
+index 57955d333edb43402233924b48977fc06dee997a..9b434665712c80e5e29105fadfac8dee5509094c 100644
 --- a/controller/relay.go
 +++ b/controller/relay.go
-@@ -24,6 +24,7 @@ import (
+@@ -25,6 +25,7 @@ import (
  	relaycommon "github.com/QuantumNous/new-api/relay/common"
  	relayconstant "github.com/QuantumNous/new-api/relay/constant"
  	"github.com/QuantumNous/new-api/relay/helper"

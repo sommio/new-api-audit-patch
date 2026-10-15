@@ -1,4 +1,4 @@
-From 0645ea221300443eb22b4a4781d8779681865835 Mon Sep 17 00:00:00 2001
+From f64c5777ab1164c1468566ab181ddc68ff03d365 Mon Sep 17 00:00:00 2001
 From: sommio <sommio.mail@gmail.com>
 Date: Thu, 8 Oct 2026 11:30:03 +0800
 Subject: [PATCH] =?UTF-8?q?test(sqlite):=20=E4=BF=AE=E5=A4=8D=E5=AE=89?=
@@ -9,11 +9,11 @@ Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit
 
 ---
- controller/security_enrollment_test.go | 47 ++++++++++++++++++++++++--
- 1 file changed, 45 insertions(+), 2 deletions(-)
+ controller/security_enrollment_test.go | 56 ++++++++++++++++++++------
+ 1 file changed, 44 insertions(+), 12 deletions(-)
 
 diff --git a/controller/security_enrollment_test.go b/controller/security_enrollment_test.go
-index 7cbc56fa468841676270a5e48acb627f28728a13..ba0a7f74a7ed55bbc362bf30c640e9c3ed22641f 100644
+index bb5a8e0644b5a9f70f3dd37f7d4e129b33472f8d..116c21751a58be99803d279b758278c25dd37dfb 100644
 --- a/controller/security_enrollment_test.go
 +++ b/controller/security_enrollment_test.go
 @@ -17,6 +17,7 @@ import (
@@ -24,15 +24,7 @@ index 7cbc56fa468841676270a5e48acb627f28728a13..ba0a7f74a7ed55bbc362bf30c640e9c3
  	"os"
  	"strconv"
  	"strings"
-@@ -32,6 +33,7 @@ import (
- 	"github.com/QuantumNous/new-api/setting/system_setting"
- 	"github.com/fxamacker/cbor/v2"
- 	"github.com/gin-gonic/gin"
-+	"github.com/glebarez/sqlite"
- 	"github.com/golang-jwt/jwt/v5"
- 	"github.com/pquerna/otp/totp"
- 	"github.com/stretchr/testify/assert"
-@@ -40,6 +42,47 @@ import (
+@@ -41,6 +42,47 @@ import (
  	"gorm.io/gorm/logger"
  )
  
@@ -80,11 +72,21 @@ index 7cbc56fa468841676270a5e48acb627f28728a13..ba0a7f74a7ed55bbc362bf30c640e9c3
  func setupSecurityEnrollmentTest(t *testing.T) (*model.User, service.AuthIdentity) {
  	t.Helper()
  	require.NoError(t, i18n.Init())
-@@ -54,8 +97,8 @@ func setupSecurityEnrollmentTest(t *testing.T) (*model.User, service.AuthIdentit
+@@ -55,18 +97,8 @@ func setupSecurityEnrollmentTest(t *testing.T) (*model.User, service.AuthIdentit
  		dialect = "sqlite"
  	}
  	dsn := os.Getenv("TEST_" + strings.ToUpper(dialect) + "_DSN")
--	db, _ := newAuditTestDatabase(t, dialect, dsn)
+-	var db *gorm.DB
+-	if dialect == "sqlite" {
+-		// Match common.SQLitePath: take the writer lock before transaction reads.
+-		// Deferred transactions can fail to upgrade their read lock when concurrent
+-		// proof consumption overlaps account deletion or session revocation.
+-		var err error
+-		db, err = gorm.Open(sqlite.Open(t.TempDir()+"/security.db?_pragma=busy_timeout(30000)&_pragma=journal_mode(WAL)&_txlock=immediate"), &gorm.Config{})
+-		require.NoError(t, err)
+-	} else {
+-		db, _ = newAuditTestDatabase(t, dialect, dsn)
+-	}
 -	logDB, _ := newAuditTestDatabase(t, dialect, dsn)
 +	db, _ := newSecurityTestDatabase(t, dialect, dsn)
 +	logDB, _ := newSecurityTestDatabase(t, dialect, dsn)
